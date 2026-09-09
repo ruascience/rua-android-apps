@@ -1,0 +1,96 @@
+{
+  "note": "Shared parity contract for the PPG pulse gate. BOTH tools/test_protocol.py AND app/test/ppg_test.dart build these inputs from this spec and assert the same expected verdict. If the two implementations ever drift, one suite fails.",
+  "rate_hz": 50,
+  "synthetic": {
+    "dc": 2000000,
+    "ac_fraction": 0.015,
+    "harmonic_fraction": 0.3,
+    "seconds": 30,
+    "formula": "floor(dc * (1 + ac_fraction * (sin(p) + harmonic_fraction*sin(2p)))) where p = 2*pi*(bpm/60)*i/rate_hz. floor (not round) so Python and Dart agree exactly on ties."
+  },
+  "cases": [
+    {
+      "name": "synthetic_48bpm",
+      "kind": "synthetic_pulse",
+      "bpm": 48,
+      "expect_pulse": true,
+      "expect_bpm_within": 6,
+      "why": "a slow but genuine resting pulse must be accepted"
+    },
+    {
+      "name": "synthetic_60bpm",
+      "kind": "synthetic_pulse",
+      "bpm": 60,
+      "expect_pulse": true,
+      "expect_bpm_within": 6,
+      "why": "the canonical case"
+    },
+    {
+      "name": "synthetic_95bpm",
+      "kind": "synthetic_pulse",
+      "bpm": 95,
+      "expect_pulse": true,
+      "expect_bpm_within": 10,
+      "why": "an elevated rate must still be accepted"
+    },
+    {
+      "name": "real_capture",
+      "kind": "fixture_samples",
+      "fixture": "ppg_real_0x3a.json",
+      "expect_pulse": false,
+      "why": "the real 0x3A stream carries no pulse (PROTOCOL.md 6.2.3a)"
+    },
+    {
+      "name": "three_byte_misdecode",
+      "kind": "fixture_frames_3byte",
+      "fixture": "ppg_frames_raw.json",
+      "expect_pulse": false,
+      "why": "genuinely periodic at an artificial 4-sample byte-alignment period; GUARD 1 must reject it rather than report 161 bpm"
+    },
+    {
+      "name": "monotonic_drift",
+      "kind": "linear_ramp",
+      "start": 2000000,
+      "step": 300,
+      "count": 1500,
+      "expect_pulse": false,
+      "why": "drift peaks nowhere; GUARD 2 must reject it rather than report 49 bpm"
+    },
+    {
+      "name": "all_zero",
+      "kind": "constant",
+      "value": 0,
+      "count": 1500,
+      "expect_pulse": false,
+      "why": "no signal at all"
+    },
+    {
+      "name": "flat_dc",
+      "kind": "constant",
+      "value": 2000000,
+      "count": 1500,
+      "expect_pulse": false,
+      "why": "a perfectly flat trace has no excursion and no period"
+    },
+    {
+      "name": "pulse_behind_agc_transient",
+      "kind": "synthetic_pulse_with_transient",
+      "bpm": 60,
+      "prefix_count": 20,
+      "prefix_value": 40000000,
+      "expect_pulse": true,
+      "expect_bpm_within": 6,
+      "why": "a leading transient (the band's AGC settle) must not silence a real pulse \u2014 it wrecks the autocorrelation variance unless the signal is winsorized"
+    },
+    {
+      "name": "pulse_with_dropouts",
+      "kind": "synthetic_pulse_with_dropouts",
+      "bpm": 60,
+      "dropout_start": 100,
+      "dropout_stride": 250,
+      "expect_pulse": true,
+      "expect_bpm_within": 8,
+      "why": "BLE dropouts arrive as zeros; they must not shift the apparent rate, and must not destroy the analysis either"
+    }
+  ]
+}

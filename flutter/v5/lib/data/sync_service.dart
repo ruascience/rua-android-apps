@@ -1,0 +1,256 @@
+/// Pulling the band's history, and sampling it live.
+///
+/// This used to live inside DevicePage, which meant a sync could only happen
+/// while somebody was looking at that screen. Automatic reconnection needs the
+/// same work done with no UI attached — a reconnect without a sync is half a
+/// fix, since the reason the drop mattered is the data logged while the link
+/// was down.
+library;
+
+import 'dart:async';
+
+import '../ble/band_link.dart';
+import '../protocol/jstyle.dart' as j;
+import 'store.dart';
+
+class SyncService {
+  SyncService._();
+  static final SyncService instance = SyncService._();
+
+  final BandLink _link = BandLink.instance;
+
+  /// One sync at a time.
+  ///
+  /// Both the Sync button and the reconnect handler call this, and they can
+  /// fire together — a reconnect while the user is already syncing. Two
+  /// concurrent pulls interleave their history frames on one notify
+  /// characteristic, and the paging cursor is per-opcode, so the records come
+  /// back attributed to the wrong stream.
+  bool _busy = false;
+  bool get busy => _busy;
+
+  /// Emits whenever a sync starts or finishes.
+  ///
+  /// Added because the startup auto-connect now kicks off a sync on its own:
+  /// for the ~40 s that takes, a tap on "Sync history" hit the guard below
+  /// and returned instantly, with no spinner, no message and nothing in the
+  /// log. Indistinguishable from a dead button.
+  final _changes = StreamController<void>.broadcast();
+  Stream<void> get changes => _changes.stream;
+
+  Future<void> syncAll() async {
+    if (_busy || !_link.connected) return;
+    _busy = true;
+    _changes.add(null);
+    try {
+      final dev = _link.deviceName;
+      await _link.readBattery();
+
+      // Steps / distance / calories: opcode 0x51, one record per day.
+      final days = await _link.readDailyTotals();
+      if (days.isNotEmpty) {
+        await Store.instance.putSamples(dev, 'steps',
+            [for (final d in days) Sample(d.day, d.steps.toDouble())]);
+        await Store.instance.putSamples(
+            dev, 'distance', [for (final d in days) Sample(d.day, d.km)]);
+        await Store.instance.putSamples(
+            dev, 'calories', [for (final d in days) Sample(d.day, d.kcal)]);
+        await Store.instance.putSamples(dev, 'active_minutes', [
+          for (final d in days) Sample(d.day, d.active.inMinutes.toDouble())
+        ]);
+        _link.log.add('stored ${days.length} day(s) of activity');
+      }
+
+      for (final op
+          in j.ops.where((o) => o.safe && o.name.startsWith('hist_'))) {
+        final records = await _link.pullHistory(op.code);
+        if (records.isEmpty) continue;
+
+        final bucket = <String, List<Sample>>{};
+        final sleepSegs = <j.SleepSegment>[];
+        void add(String metric, DateTime? t, num? v) {
+          if (t == null || v == null) return;
+          (bucket[metric] ??= []).add(Sample(t, v.toDouble()));
+        }
+
+        for (final r in records) {
+          // Every arm below is reachable only if this build's opcode table
+          // lists that opcode as a hist_ entry — the loop above is what
+          // decides. Arms for opcodes another band keeps its data under are
+          // kept here so all three apps share one decoder.
+          switch (op.code) {
+            case j.opHeartRateOnce:
+              // Spot heart rate: one sample per record, not 0x54's 15 slots.
+              final o = j.parseHeartRateOnce(r);
+              add('heart_rate', o.time, o.bpm);
+            case j.opHistHeartRate:
+              for (final e in j.hrSamplesTimed(r)) {
+                add('heart_rate', e.key, e.value);
+              }
+            case j.opTemperatureHistory:
+              final t62 = j.parseTempRecord(r);
+              add('temperature', t62.time, t62.celsius);
+            case j.opHistTemperature:
+              final t = j.parseTempRecord(r);
+              add('temperature', t.time, t.celsius);
+            case j.opHistSpo2:
+            case j.opHistSpo2Alt:
+              final s = j.parseSpo2Record(r);
+              add('spo2', s.time, s.percent);
+            case j.opHistSleep:
+              final seg = j.parseSleepRecord(r);
+              if (seg != null) sleepSegs.add(seg);
+            case j.opHistHrv:
+              final h = j.parseHrvRecord(r);
+              if (h != null) {
+                add('hrv', h.time, h.hrvMs);
+                add('stress', h.time, h.stress);
+                // A zero in a scheduled record means NOBODY ASKED, not a
+                // reading of zero. Storing them would put 0 bpm in the
+                // history and drag every average down.
+                if (h.heartRate > 0) add('heart_rate', h.time, h.heartRate);
+                if (h.systolic > 0) add('systolic', h.time, h.systolic);
+                if (h.diastolic > 0) add('diastolic', h.time, h.diastolic);
+              }
+          }
+        }
+
+        if (sleepSegs.isNotEmpty) {
+          await Store.instance.putSleepSegments(dev, sleepSegs);
+          _link.log.add('stored ${sleepSegs.length} sleep segments');
+        }
+        for (final e in bucket.entries) {
+          await Store.instance.putSamples(dev, e.key, e.value);
+          _link.log.add('stored ${e.value.length} ${e.key}');
+        }
+      }
+    } finally {
+      _busy = false;
+      _changes.add(null);
+    }
+  }
+}
+
+/// Drives an on-demand measurement on a fixed interval and stores the result.
+///
+/// ⚠ At the current five-minute interval there is a cheaper way to get the
+/// same numbers, and it is worth knowing about before using this.
+///
+/// The band's OWN background logging (0x2A) also bottoms out at 5 minutes.
+/// Where this differs from that is not resolution — it is who does the work:
+///
+///   * 0x2A: the BAND samples and logs on its own. Costs almost nothing,
+///     keeps running with the phone out of range, and survives a dropped
+///     link. Read it back later with a sync.
+///   * this: the APP asks over BLE each interval with 0x28. Only runs while
+///     connected, and each cycle keeps the optical front end lit for ~30 s.
+///
+/// So at 5 minutes, 0x2A does the same job better. This earns its place when
+/// a reading is wanted immediately rather than on the next sync, or at an
+/// interval the band's own scheduler cannot reach — under 5 minutes, where
+/// 0x2A simply cannot go.
+///
+/// Blood pressure is deliberately NOT stored from these cycles. The band
+/// reports it and it decodes cleanly, which is exactly the problem: no wrist
+/// optical sensor can measure it without cuff calibration.
+class PeriodicSampler {
+  PeriodicSampler._();
+  static final PeriodicSampler instance = PeriodicSampler._();
+
+  final BandLink _link = BandLink.instance;
+
+  /// How often a cycle STARTS. A cycle that overruns is not stacked on top of
+  /// the next one — see [_running].
+  ///
+  /// Five minutes. Below this the band's own 0x2A scheduler cannot follow, so
+  /// app-driven sampling is the only option; at or above it, 0x2A is the
+  /// better tool (see the class doc).
+  static const period = Duration(minutes: 5);
+
+  /// How long to wait for the sensor to converge before giving up on a cycle.
+  static const convergeLimit = Duration(seconds: 40);
+
+  Timer? _timer;
+  bool _running = false;
+  bool get enabled => _timer != null;
+
+  DateTime? lastSampleAt;
+  String lastResult = '';
+
+  void start() {
+    if (_timer != null) return;
+    _link.log.add('periodic sampling: on (every ${period.inMinutes} min)');
+    _timer = Timer.periodic(period, (_) => _tick());
+    unawaited(_tick());
+  }
+
+  void stop() {
+    if (_timer == null) return;
+    _timer!.cancel();
+    _timer = null;
+    _link.log.add('periodic sampling: off');
+  }
+
+  Future<void> _tick() async {
+    // Skip rather than queue. A sync or a manual measurement owns the same
+    // single command channel — overlapping them interleaves frames on one
+    // notify characteristic and misattributes the replies. A skipped tick is
+    // picked up by the next one rather than queued behind a long sync.
+    if (_running || !_link.connected || SyncService.instance.busy) return;
+    _running = true;
+    try {
+      final start = _link.replies.length;
+      await _link.sendOp(j.opMeasure,
+          payload: j.measurePayload(on: true),
+          wait: const Duration(milliseconds: 600));
+
+      // The band acks immediately with an all-zero frame and sends real
+      // values ~30 s later. Taking the ack for the answer cancels the
+      // measurement every time.
+      j.LiveReading? got;
+      double? tempC;
+      final deadline = DateTime.now().add(convergeLimit);
+      while (DateTime.now().isBefore(deadline) && got == null) {
+        await Future.delayed(const Duration(milliseconds: 500));
+        if (!_link.connected) break;
+        for (final r in _link.replies.skip(start)) {
+          final c = j.parseRealtimeTemperature(r.data);
+          if (c != null) tempC = c;
+          if (r.opcode != j.opMeasure) continue;
+          final p = j.parseOnDemand(r.data);
+          if (p != null && p.hasAnything) got = p;
+        }
+      }
+
+      if (_link.connected) {
+        await _link.sendOp(j.opMeasure, payload: j.measurePayload(on: false));
+      }
+
+      final now = DateTime.now();
+      final dev = _link.deviceName;
+      final bits = <String>[];
+      Future<void> put(String metric, num v) async {
+        await Store.instance.putSamples(dev, metric, [Sample(now, v.toDouble())]);
+        bits.add('$metric $v');
+      }
+
+      // A zero is the band's "no reading" filler, never a measurement.
+      if (got != null) {
+        if (got.heartRate > 0) await put('heart_rate', got.heartRate);
+        if (got.spo2 > 0) await put('spo2', got.spo2);
+        if (got.hrvMs > 0) await put('hrv', got.hrvMs);
+      }
+      if (tempC != null) await put('temperature', tempC);
+
+      lastSampleAt = now;
+      lastResult = bits.isEmpty ? 'no reading' : bits.join(' · ');
+      if (bits.isEmpty) {
+        _link.log.add('periodic sample: sensor did not converge');
+      }
+    } catch (e) {
+      _link.log.add('minute sample failed: $e');
+    } finally {
+      _running = false;
+    }
+  }
+}
