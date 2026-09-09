@@ -31,7 +31,10 @@ import 'dart:async';
 import 'dart:convert';
 
 import 'package:flutter/foundation.dart';
+import 'dart:io';
+
 import 'package:http/http.dart' as http;
+import 'package:http/io_client.dart';
 import 'package:shared_preferences/shared_preferences.dart';
 
 import 'profile.dart';
@@ -46,12 +49,75 @@ class CloudSync {
 
   static const _kBase = 'cloud.base_url';
   static const _kEnabled = 'cloud.enabled';
+  static const _kUser = 'cloud.auth_user';
+  static const _kPass = 'cloud.auth_pass';
 
-  /// Default points at the dev machine on the LAN. `localhost` would be the
-  /// PHONE, which is the classic way this looks broken for an afternoon.
-  static const defaultBaseUrl = 'http://192.168.1.64:8101';
+  /// The server in AKS, reached by address: there is no hostname for it, so
+  /// there is no TLS either. `localhost` would be the PHONE, which is the
+  /// classic way this looks broken for an afternoon.
+  static const defaultBaseUrl = 'https://48.202.193.164:8101';
+
+  /// The server's self-signed certificate, pinned.
+  ///
+  /// There is no hostname for this deployment, so no public CA will issue for
+  /// it — the certificate carries an IP SAN and signs itself. Pinning is what
+  /// makes that safe: this app trusts exactly this certificate and no other,
+  /// which is a stronger guarantee than the public CA system gives, not a
+  /// weaker one. It is also why the connection must never fall back to
+  /// accepting any certificate.
+  ///
+  /// Rotating the server certificate means shipping an app update. Valid to
+  /// 2028-12-12.
+  static const pinnedCertPem = '''
+-----BEGIN CERTIFICATE-----
+MIIDOzCCAiOgAwIBAgIUO1pBbiMquqXYUlv6jfvXfQP7RMYwDQYJKoZIhvcNAQEL
+BQAwJDEUMBIGA1UEAwwLYXVyYS12NS1hcGkxDDAKBgNVBAoMA1JVQTAeFw0yNjA5
+MDkxODM1MzdaFw0yODEyMTIxODM1MzdaMCQxFDASBgNVBAMMC2F1cmEtdjUtYXBp
+MQwwCgYDVQQKDANSVUEwggEiMA0GCSqGSIb3DQEBAQUAA4IBDwAwggEKAoIBAQCe
+n1neZtsDpENJen2SWRXTjKzS6//SV0Ra/4BYQm+FVYOb/C4YEJ0L1jHzJW9hMWl0
+cBEnSBYGatk9rjnOw+38Y/PWbtdb8CwGHBwqwYm6lz3KRk0teSxzv3JD+q1civ91
+aodMGBhp+Z4BOGE2riH/HNJIiXruKF9/3oKoxdYrFJTMxXLVJA7zr4Y4v5zoqnvn
+S9PqDwKT+T7s2UT8BFP0XC5XnQizkuXbc7TUC04EhcX0vRdNyCq4QhTwODPOdB+B
+bGzwENZL1htjKKCCi96as5VQKH+qV3oku1sL9OtHCFPFdmlqxGTVe/rtY5qC+Kkl
+4k+pJ+64lIO4w8pG2+r1AgMBAAGjZTBjMAwGA1UdEwEB/wQCMAAwDgYDVR0PAQH/
+BAQDAgWgMBMGA1UdJQQMMAoGCCsGAQUFBwMBMA8GA1UdEQQIMAaHBDDKwaQwHQYD
+VR0OBBYEFC/ROoEbSka6OYLSqCIjIDHFglhdMA0GCSqGSIb3DQEBCwUAA4IBAQA2
+TlVPiQX0uR4Yf/vt6B59cdl6222tqXRWcSCB0IiTieIQnRQR9jL1k0HXBopSExdb
+YvMYoqyAPNWY5jGOUcB49G+kldr0P/nlx0yfEFRa5BJU0AJiI3pPsS7wPHWCEsOF
+nWcGqvxXJXkm0b+pf1Cg46byQUQPUOi0u3S5PaRtdUWRgNnRcWO46VNONLHHo49K
+jyhn7zPAyvS/SaEpVHhuQqTEmCXhVlF8U9P2gm2e1crp5ZG/BTwi/MpzI3cSOGlL
+9eRrzQa082rsFbxQSrOt0LmBNyiqDOrM3B/KfRZo7UX5N7PICJWAaj0p89T62Ql+
+5R4ilAjIHIhrmRO29Wrn
+-----END CERTIFICATE-----''';
+
+  /// The same certificate as DER, base64, for the exact-match fallback below.
+  static const _pinnedDerB64 = 'MIIDOzCCAiOgAwIBAgIUO1pBbiMquqXYUlv6jfvXfQP7RMYwDQYJKoZIhvcNAQELBQAwJDEUMBIGA1UEAwwLYXVyYS12NS1hcGkxDDAKBgNVBAoMA1JVQTAeFw0yNjA5MDkxODM1MzdaFw0yODEyMTIxODM1MzdaMCQxFDASBgNVBAMMC2F1cmEtdjUtYXBpMQwwCgYDVQQKDANSVUEwggEiMA0GCSqGSIb3DQEBAQUAA4IBDwAwggEKAoIBAQCen1neZtsDpENJen2SWRXTjKzS6//SV0Ra/4BYQm+FVYOb/C4YEJ0L1jHzJW9hMWl0cBEnSBYGatk9rjnOw+38Y/PWbtdb8CwGHBwqwYm6lz3KRk0teSxzv3JD+q1civ91aodMGBhp+Z4BOGE2riH/HNJIiXruKF9/3oKoxdYrFJTMxXLVJA7zr4Y4v5zoqnvnS9PqDwKT+T7s2UT8BFP0XC5XnQizkuXbc7TUC04EhcX0vRdNyCq4QhTwODPOdB+BbGzwENZL1htjKKCCi96as5VQKH+qV3oku1sL9OtHCFPFdmlqxGTVe/rtY5qC+Kkl4k+pJ+64lIO4w8pG2+r1AgMBAAGjZTBjMAwGA1UdEwEB/wQCMAAwDgYDVR0PAQH/BAQDAgWgMBMGA1UdJQQMMAoGCCsGAQUFBwMBMA8GA1UdEQQIMAaHBDDKwaQwHQYDVR0OBBYEFC/ROoEbSka6OYLSqCIjIDHFglhdMA0GCSqGSIb3DQEBCwUAA4IBAQA2TlVPiQX0uR4Yf/vt6B59cdl6222tqXRWcSCB0IiTieIQnRQR9jL1k0HXBopSExdbYvMYoqyAPNWY5jGOUcB49G+kldr0P/nlx0yfEFRa5BJU0AJiI3pPsS7wPHWCEsOFnWcGqvxXJXkm0b+pf1Cg46byQUQPUOi0u3S5PaRtdUWRgNnRcWO46VNONLHHo49Kjyhn7zPAyvS/SaEpVHhuQqTEmCXhVlF8U9P2gm2e1crp5ZG/BTwi/MpzI3cSOGlL9eRrzQa082rsFbxQSrOt0LmBNyiqDOrM3B/KfRZo7UX5N7PICJWAaj0p89T62Ql+5R4ilAjIHIhrmRO29Wrn';
+
+  /// HTTP Basic, required by every /api route since the server moved off the
+  /// LAN. Supplied at BUILD time, not committed:
+  ///
+  ///   flutter build apk --release \
+  ///     --dart-define=AURA_AUTH_USER=rua-band \
+  ///     --dart-define=AURA_AUTH_PASS=...
+  ///
+  /// This repository is public, which is the whole reason these are not
+  /// literals here — a credential in a public repository is scraped within
+  /// minutes and cannot be unpublished. The value still ends up inside the
+  /// APK and is readable by anyone who unpacks it, so it is a shared pilot
+  /// credential rather than a secret; keeping it out of git is what stops it
+  /// being a PUBLISHED one.
+  ///
+  /// Built without them, the app starts with no credentials and every sync
+  /// answers 401 — which is retryable, so the outbox pauses rather than
+  /// drains, and the Cloud settings screen can supply them by hand.
+  static const defaultAuthUser =
+      String.fromEnvironment('AURA_AUTH_USER', defaultValue: '');
+  static const defaultAuthPass =
+      String.fromEnvironment('AURA_AUTH_PASS', defaultValue: '');
 
   String baseUrl = defaultBaseUrl;
+  String authUser = defaultAuthUser;
+  String authPass = defaultAuthPass;
   bool enabled = true;
 
   CloudState state = CloudState.idle;
@@ -71,7 +137,47 @@ class CloudSync {
   Stream<void> get changes => _changes.stream;
   void _emit() => _changes.add(null);
 
-  http.Client _client = http.Client();
+  http.Client _client = _newClient();
+
+  /// A client that trusts the pinned certificate and nothing else.
+  ///
+  /// Two layers on purpose. `setTrustedCertificatesBytes` with
+  /// `withTrustedRoots: false` makes the pinned certificate the only root, so
+  /// normal validation — including the IP SAN check — still runs. The callback
+  /// is the fallback for the case where that validation refuses an IP-only
+  /// certificate on some platform: it compares the DER bytes exactly, so it
+  /// accepts precisely one certificate and cannot degrade into "accept
+  /// anything", which is what `=> true` here would have meant.
+  static http.Client _newClient() {
+    try {
+      final ctx = SecurityContext(withTrustedRoots: false)
+        ..setTrustedCertificatesBytes(utf8.encode(pinnedCertPem));
+      final io = HttpClient(context: ctx)
+        ..badCertificateCallback = (cert, host, port) =>
+            base64Encode(cert.der) == _pinnedDerB64;
+      return IOClient(io);
+    } catch (_) {
+      // dart:io unavailable, or the certificate failed to parse. Plain client
+      // rather than no client: an http:// base URL still works, and an
+      // https:// one fails loudly at connect time instead of silently
+      // trusting whatever answers.
+      return http.Client();
+    }
+  }
+
+  /// Basic credentials for every /api request. Omitted entirely when unset,
+  /// so a build pointed at an older unauthenticated server still works.
+  Map<String, String> get _authHeaders => authUser.isEmpty && authPass.isEmpty
+      ? const {}
+      : {
+          'Authorization':
+              'Basic ${base64Encode(utf8.encode('$authUser:$authPass'))}',
+        };
+
+  Map<String, String> get _jsonHeaders => {
+        'Content-Type': 'application/json',
+        ..._authHeaders,
+      };
 
   /// False once a test has injected a client, so the reset below never throws
   /// a real socket back into a test.
@@ -136,7 +242,7 @@ class CloudSync {
     try {
       _client.close();
     } catch (_) {}
-    _client = http.Client();
+    _client = _newClient();
   }
 
   Timer? _timer;
@@ -158,6 +264,8 @@ class CloudSync {
       final p = await SharedPreferences.getInstance();
       baseUrl = p.getString(_kBase) ?? defaultBaseUrl;
       enabled = p.getBool(_kEnabled) ?? true;
+      authUser = p.getString(_kUser) ?? defaultAuthUser;
+      authPass = p.getString(_kPass) ?? defaultAuthPass;
     } catch (_) {
       // Preferences unavailable — carry on with the defaults rather than
       // leaving sync switched off for a reason the user cannot see.
@@ -194,6 +302,17 @@ class CloudSync {
     } catch (_) {}
     _emit();
     if (v) unawaited(flush());
+  }
+
+  Future<void> setAuth(String user, String pass) async {
+    authUser = user.trim();
+    authPass = pass;
+    try {
+      final p = await SharedPreferences.getInstance();
+      await p.setString(_kUser, authUser);
+      await p.setString(_kPass, authPass);
+    } catch (_) {}
+    _emit();
   }
 
   Future<void> setBaseUrl(String url) async {
@@ -393,7 +512,7 @@ class CloudSync {
       final res = await _client
           .put(
             Uri.parse('$baseUrl/api/v1/profile'),
-            headers: const {'Content-Type': 'application/json'},
+            headers: _jsonHeaders,
             body: jsonEncode({
               'id': id,
               'device': device,
@@ -470,7 +589,7 @@ class CloudSync {
   Future<bool> serverHoldsNoProfiles() async {
     try {
       final res = await _client
-          .get(Uri.parse('$baseUrl/api/v1/summary'))
+          .get(Uri.parse('$baseUrl/api/v1/summary'), headers: _authHeaders)
           .timeout(const Duration(seconds: 10));
       if (res.statusCode < 200 || res.statusCode >= 300) return false;
       final body = jsonDecode(res.body);
@@ -580,8 +699,10 @@ class CloudSync {
   Future<bool?> _legacyProfileExists(String device) async {
     try {
       final res = await _client
-          .get(Uri.parse(
-              '$baseUrl/api/v1/profile/${Uri.encodeComponent(device)}'))
+          .get(
+              Uri.parse(
+                  '$baseUrl/api/v1/profile/${Uri.encodeComponent(device)}'),
+              headers: _authHeaders)
           .timeout(const Duration(seconds: 10));
       if (res.statusCode == 404) return false;
       if (res.statusCode >= 200 && res.statusCode < 300) return true;
@@ -603,7 +724,9 @@ class CloudSync {
         Uri.parse('$baseUrl/api/v1/profile/by-band/${Uri.encodeComponent(key)}$q');
     final http.Response res;
     try {
-      res = await _client.get(uri).timeout(const Duration(seconds: 10));
+      res = await _client
+          .get(uri, headers: _authHeaders)
+          .timeout(const Duration(seconds: 10));
     } catch (_) {
       // Same reasoning as _post: a pooled socket left half-open by a server
       // restart hangs rather than failing, and must not be retried over.
@@ -660,12 +783,25 @@ class CloudSync {
       final res = await _client
           .post(
             Uri.parse('$baseUrl$path'),
-            headers: const {'Content-Type': 'application/json'},
+            headers: _jsonHeaders,
             body: jsonEncode(body),
           )
           .timeout(const Duration(seconds: 20));
 
       if (res.statusCode >= 200 && res.statusCode < 300) return true;
+
+      // 401/403 are the exception to the rule below. They say nothing about
+      // the payload — the credential is wrong or missing — and the fix is on
+      // the server or in settings, not in the data. Treating them as
+      // permanent would mark every queued batch done and DISCARD it, so a
+      // mistyped password would silently destroy the outbox instead of
+      // pausing it. Retryable, like a 5xx.
+      if (res.statusCode == 401 || res.statusCode == 403) {
+        state = CloudState.error;
+        lastError = 'unauthorized ${res.statusCode} — check cloud credentials';
+        debugPrint('[AuraV5] cloud auth rejected $path: ${res.statusCode}');
+        return false;
+      }
 
       if (res.statusCode >= 400 && res.statusCode < 500) {
         // Permanent. Retrying an unacceptable payload forever would wedge the
@@ -703,14 +839,24 @@ class CloudSync {
       s.length <= 120 ? s : '${s.substring(0, 120)}…';
 
   /// Is the server there? Used by the UI's Test button only.
+  ///
+  /// Deliberately NOT /actuator/health. Actuator is served on a second port
+  /// that is private to the pod — it is how Kubernetes probes the container,
+  /// and its body names the database — so nothing outside the cluster can
+  /// reach it. /api/v1/summary is the cheapest authenticated route, which
+  /// also makes this test cover the credential and not just the socket.
   Future<bool> ping() async {
     try {
       final res = await _client
-          .get(Uri.parse('$baseUrl/actuator/health'))
+          .get(Uri.parse('$baseUrl/api/v1/summary'), headers: _authHeaders)
           .timeout(const Duration(seconds: 6));
       final ok = res.statusCode == 200;
       state = ok ? CloudState.idle : CloudState.error;
-      lastError = ok ? '' : 'health ${res.statusCode}';
+      lastError = ok
+          ? ''
+          : res.statusCode == 401 || res.statusCode == 403
+              ? 'unauthorized ${res.statusCode} — check credentials'
+              : 'server ${res.statusCode}';
       _emit();
       return ok;
     } catch (e) {
