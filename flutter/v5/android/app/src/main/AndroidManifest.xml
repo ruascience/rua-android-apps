@@ -9,6 +9,17 @@
         android:maxSdkVersion="30" />
     <uses-permission android:name="android.permission.ACCESS_FINE_LOCATION"
         android:maxSdkVersion="30" />
+
+    <!-- The foreground service that keeps the band syncing while the app is
+         not on screen. connectedDevice is the correct type for holding a BLE
+         link; Android 14+ rejects a service whose declared type does not match
+         what it actually does. POST_NOTIFICATIONS is not optional either — the
+         service's notification is what makes it a foreground service, and one
+         that cannot be shown is killed. -->
+    <uses-permission android:name="android.permission.FOREGROUND_SERVICE" />
+    <uses-permission android:name="android.permission.FOREGROUND_SERVICE_CONNECTED_DEVICE" />
+    <uses-permission android:name="android.permission.POST_NOTIFICATIONS" />
+    <uses-permission android:name="android.permission.WAKE_LOCK" />
     <application
         android:label="Rua Science"
         android:name="${applicationName}"
@@ -26,7 +37,7 @@
                  the Android process has started. This theme is visible to the user
                  while the Flutter UI initializes. After that, this theme continues
                  to determine the Window background behind the Flutter UI. -->
-            <meta-data
+        <meta-data
               android:name="io.flutter.embedding.android.NormalTheme"
               android:resource="@style/NormalTheme"
               />
@@ -35,6 +46,15 @@
                 <category android:name="android.intent.category.LAUNCHER"/>
             </intent-filter>
         </activity>
+
+        <!-- Sibling of the activity, not a child of it: a <service> nested
+             inside <activity> is not registered, and the failure is a runtime
+             "service not found" rather than a build error. -->
+        <service
+            android:name="com.pravera.flutter_foreground_task.service.ForegroundService"
+            android:foregroundServiceType="connectedDevice"
+            android:exported="false" />
+
         <!-- Don't delete the meta-data below.
              This is used by the Flutter tool to generate GeneratedPluginRegistrant.java -->
         <meta-data

@@ -8,6 +8,7 @@ import 'package:intl/intl.dart';
 
 import '../ble/band_link.dart';
 import '../data/profile.dart';
+import '../data/background.dart';
 import '../data/cloud_sync.dart';
 import '../data/store.dart';
 import '../data/sync_service.dart';
@@ -397,6 +398,61 @@ class _DevicePageState extends State<DevicePage> {
             ),
           ]),
         ),
+      );
+
+  /// The foreground service toggle.
+  ///
+  /// Framed by what it costs as well as what it does: it is a permanent
+  /// notification and it uses battery, and a switch that mentioned neither
+  /// would be the app taking that decision on the user's behalf.
+  Widget _backgroundCard(ThemeData t) => StreamBuilder<void>(
+        stream: BackgroundSync.instance.changes,
+        builder: (context, _) {
+          final bg = BackgroundSync.instance;
+          return Card(
+            child: Padding(
+              padding: const EdgeInsets.all(16),
+              child: Column(
+                  crossAxisAlignment: CrossAxisAlignment.start,
+                  children: [
+                    Text('Sync in the background',
+                        style: t.textTheme.titleMedium),
+                    const SizedBox(height: 4),
+                    Text(
+                      bg.supported
+                          ? 'Android stops this app the moment it leaves the '
+                              'screen, and with it the timers that collect from '
+                              'your band. Switch this on and the app keeps '
+                              'running — you will see a permanent notification '
+                              'while it does, which is Android telling you the '
+                              'app is active. It uses more battery.'
+                          : 'Not available on this platform yet. The app '
+                              'collects from your band while it is open.',
+                      style: t.textTheme.bodySmall?.copyWith(color: kMuted),
+                    ),
+                    SwitchListTile(
+                      contentPadding: EdgeInsets.zero,
+                      value: bg.enabled,
+                      title: const Text('Keep collecting when closed'),
+                      onChanged: !bg.supported
+                          ? null
+                          : (v) async {
+                              if (!v) {
+                                await bg.stop();
+                              } else {
+                                final why = await bg.start();
+                                if (why != null && context.mounted) {
+                                  ScaffoldMessenger.of(context).showSnackBar(
+                                      SnackBar(content: Text(why)));
+                                }
+                              }
+                              if (mounted) setState(() {});
+                            },
+                    ),
+                  ]),
+            ),
+          );
+        },
       );
 
   /// Cloud sync status.
@@ -868,6 +924,8 @@ class _DevicePageState extends State<DevicePage> {
           ),
         ],
         const SizedBox(height: 12),
+        _backgroundCard(t),
+        const SizedBox(height: 12),
         _cloudCard(t),
         if (showAdvancedCards) ...[
           const SizedBox(height: 12),
@@ -931,6 +989,8 @@ class _DevicePageState extends State<DevicePage> {
             ]),
           ]),
         ),
+        const SizedBox(height: 12),
+        _backgroundCard(t),
         const SizedBox(height: 12),
         _toolsCard(t),
         const SizedBox(height: 12),

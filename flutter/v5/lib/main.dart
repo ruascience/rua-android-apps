@@ -9,6 +9,7 @@ import 'ui/device_page.dart';
 import 'ui/history_page.dart';
 import 'ui/home_page.dart';
 import 'ui/insights_page.dart';
+import 'data/background.dart';
 import 'data/cloud_sync.dart';
 import 'data/sync_service.dart';
 import 'ui/kit.dart';
@@ -67,6 +68,16 @@ Future<void> main() async {
       debugPrint('[AuraV5] startup reconnect failed: $e');
     }
   }());
+
+  // Restore the foreground service if it was switched on. Before anything
+  // that schedules a timer: those timers are exactly what the service exists
+  // to keep alive, and starting it after them leaves a window where Android
+  // can stop them.
+  try {
+    await BackgroundSync.instance.load();
+  } catch (e) {
+    debugPrint('[AuraV5] background sync did not resume: $e');
+  }
 
   // Mirror SQLite to the API. Started unawaited and inside its own guard:
   // the phone works offline by design, so nothing about the cloud may delay
