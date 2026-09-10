@@ -1,0 +1,29 @@
+<?xml version="1.0" encoding="UTF-8"?>
+<!--
+  Copy to ios/ExportOptions.plist and fill in teamID. That file is gitignored:
+  the team id is not secret, but it differs per developer account and a wrong
+  one fails the export with a signing error that names nothing useful.
+
+  method:
+    ad-hoc     — Firebase App Distribution. Installs ONLY on devices whose
+                 UDID was registered in the provisioning profile BEFORE the
+                 build. Adding a tester later means regenerating the profile
+                 and rebuilding; the IPA itself carries the device list.
+    app-store  — TestFlight. No UDIDs. Internal testers (up to 100 on your
+                 team) get builds with no review; external testers need a
+                 review pass per version.
+-->
+<plist version="1.0">
+<dict>
+    <key>method</key>
+    <string>ad-hoc</string>
+    <key>teamID</key>
+    <string>YOUR_TEAM_ID</string>
+    <key>signingStyle</key>
+    <string>automatic</string>
+    <key>compileBitcode</key>
+    <false/>
+    <key>stripSwiftSymbols</key>
+    <true/>
+</dict>
+</plist>
