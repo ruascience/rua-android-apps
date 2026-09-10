@@ -29,6 +29,26 @@ class SyncService {
   bool _busy = false;
   bool get busy => _busy;
 
+  /// What the sync is doing right now, in the user's words.
+  ///
+  /// syncAll() walks every history opcode the band answers, pulling and
+  /// decoding each in turn, and that can take minutes. Reporting only "busy"
+  /// gave one indeterminate bar for the whole run: no step, no proportion, and
+  /// no way to tell a slow sync from a stuck one.
+  String phase = '';
+
+  /// Rows written to SQLite during this run, so the number moves even while a
+  /// single slow opcode is being pulled.
+  int storedThisRun = 0;
+
+  /// The last failure, if the run ended in one. Cleared when a run starts.
+  String lastError = '';
+
+  void _report(String p) {
+    phase = p;
+    _changes.add(null);
+  }
+
   /// Emits whenever a sync starts or finishes.
   ///
   /// Added because the startup auto-connect now kicks off a sync on its own:
@@ -41,12 +61,15 @@ class SyncService {
   Future<void> syncAll() async {
     if (_busy || !_link.connected) return;
     _busy = true;
-    _changes.add(null);
+    storedThisRun = 0;
+    lastError = '';
+    _report('checking battery');
     try {
       final dev = _link.deviceName;
       await _link.readBattery();
 
       // Steps / distance / calories: opcode 0x51, one record per day.
+      _report('daily activity');
       final days = await _link.readDailyTotals();
       if (days.isNotEmpty) {
         await Store.instance.putSamples(dev, 'steps',
@@ -61,8 +84,14 @@ class SyncService {
         _link.log.add('stored ${days.length} day(s) of activity');
       }
 
-      for (final op
-          in j.ops.where((o) => o.safe && o.name.startsWith('hist_'))) {
+    final historyOps =
+        j.ops.where((o) => o.safe && o.name.startsWith('hist_')).toList();
+      for (final (i, op) in historyOps.indexed) {
+        // Named by what it holds rather than by opcode: "hist_heart_rate"
+        // means nothing to the person waiting, and the number is what tells
+        // them the run is progressing rather than hung.
+        _report('${op.name.replaceFirst('hist_', '').replaceAll('_', ' ')} '
+            '(${i + 1} of ${historyOps.length})');
         final records = await _link.pullHistory(op.code);
         if (records.isEmpty) continue;
 
@@ -117,15 +146,26 @@ class SyncService {
 
         if (sleepSegs.isNotEmpty) {
           await Store.instance.putSleepSegments(dev, sleepSegs);
+          storedThisRun += sleepSegs.length;
           _link.log.add('stored ${sleepSegs.length} sleep segments');
         }
         for (final e in bucket.entries) {
           await Store.instance.putSamples(dev, e.key, e.value);
+          storedThisRun += e.value.length;
           _link.log.add('stored ${e.value.length} ${e.key}');
         }
+        _changes.add(null);
       }
+    } catch (e) {
+      // Recorded rather than swallowed. A sync that failed halfway used to be
+      // indistinguishable from one that finished: the spinner stopped either
+      // way. Rethrown so the caller can also say so.
+      lastError = '$e';
+      _link.log.add('sync failed: $e');
+      rethrow;
     } finally {
       _busy = false;
+      phase = '';
       _changes.add(null);
     }
   }

@@ -26,6 +26,15 @@ class _HomePageState extends State<HomePage> {
   Estimate? resting, recoveryScore, strainScore;
   bool loading = true;
 
+  /// True when the 14-day window held more rows than the read returned.
+  ///
+  /// History has always checked this; Home did not, and Home is where the
+  /// DERIVED numbers are — resting heart rate, recovery, strain. A silently
+  /// clipped window there does not look wrong, it looks like a slightly
+  /// different number, which is precisely the failure this project keeps
+  /// coming back to: a plausible figure that is not a measurement.
+  bool _clipped = false;
+
   /// Which device the currently displayed data was loaded for. The shell uses
   /// an IndexedStack, so these pages are built once at startup — before any
   /// band is connected — and would otherwise sit empty forever.
@@ -131,7 +140,14 @@ class _HomePageState extends State<HomePage> {
     final todayStart = DateTime.now().copyWith(
         hour: 0, minute: 0, second: 0, millisecond: 0, microsecond: 0);
 
-    final h = await Store.instance.read(dev, 'heart_rate', since: since);
+    // Raised from the 5,000 default. At a 5-minute sampling interval a
+    // 14-day window is already ~4,000 rows before the band's 15-slot history
+    // records are added, so the default was reached in ordinary use.
+    const hrWindow = 25000;
+    final h = await Store.instance
+        .read(dev, 'heart_rate', since: since, limit: hrWindow);
+    final clipped =
+        await Store.instance.wasTruncated(dev, 'heart_rate', since: since, limit: hrWindow);
     final o = await Store.instance.read(dev, 'spo2', since: since);
     final v = await Store.instance.read(dev, 'hrv', since: since);
     final t = await Store.instance.read(dev, 'temperature', since: since);
@@ -161,6 +177,7 @@ class _HomePageState extends State<HomePage> {
       strainScore =
           strain(hrToday: hrToday, age: Profile.instance.age, resting: rest);
       loading = false;
+      _clipped = clipped;
       _loadedFor = dev;
       _loadedRevision = Store.instance.revision;
     });
@@ -212,6 +229,10 @@ class _HomePageState extends State<HomePage> {
                 _offlineNotice(t),
                 const SizedBox(height: 12),
               ],
+              if (_clipped) ...[
+                _clippedNotice(t),
+                const SizedBox(height: 12),
+              ],
               if (fd.nothingConfirmedOnV5) ...[
                 _unverifiedBanner(t),
                 const SizedBox(height: 12),
@@ -242,6 +263,27 @@ class _HomePageState extends State<HomePage> {
       ),
     );
   }
+
+  /// Says the window was clipped, rather than letting the derived numbers
+  /// speak as though it was not.
+  Widget _clippedNotice(ThemeData t) => Card(
+        color: kWarn.withValues(alpha: 0.10),
+        child: Padding(
+          padding: const EdgeInsets.all(12),
+          child: Row(children: [
+            Icon(Icons.filter_alt_outlined, size: 18, color: kWarn),
+            const SizedBox(width: 10),
+            Expanded(
+              child: Text(
+                'More readings exist than fit in one read, so resting heart '
+                'rate, recovery and strain below are computed from the most '
+                'recent part of the window rather than all of it.',
+                style: t.textTheme.bodySmall?.copyWith(color: kWarn),
+              ),
+            ),
+          ]),
+        ),
+      );
 
   Widget _connectionChip(ThemeData t) {
     final on = link.connected;

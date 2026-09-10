@@ -43,6 +43,11 @@ class _DevicePageState extends State<DevicePage> {
   final bool showAdvancedCards = false;
   late final TextEditingController _urlCtl =
       TextEditingController(text: cloud.baseUrl);
+  late final TextEditingController _userCtl =
+      TextEditingController(text: cloud.authUser);
+  late final TextEditingController _passCtl =
+      TextEditingController(text: cloud.authPass);
+  bool _showPass = false;
 
   /// Live scan results. BandLink publishes each device as it is heard, and
   /// this page rebuilds on link.changes, so the list fills in as the scan
@@ -56,7 +61,20 @@ class _DevicePageState extends State<DevicePage> {
   void initState() {
     super.initState();
     profile.load().then((_) => mounted ? setState(() {}) : null);
+    // Evaluate the blocker without prompting: the card should already be
+    // showing when the user arrives, not only after a scan has failed once.
+    link.preflight(requesting: false).then((_) {
+      if (mounted) setState(() {});
+    });
     _refreshCounts();
+  }
+
+  @override
+  void dispose() {
+    _urlCtl.dispose();
+    _userCtl.dispose();
+    _passCtl.dispose();
+    super.dispose();
   }
 
   Future<void> _run(String label, Future<void> Function() body) async {
@@ -67,7 +85,18 @@ class _DevicePageState extends State<DevicePage> {
     try {
       await body();
     } catch (e) {
+      // The log keeps the detail; the user gets told. Appending only to the
+      // activity log meant a failed action and a successful one looked
+      // identical — the button simply came back.
       link.log.add('error: $e');
+      if (mounted) {
+        ScaffoldMessenger.of(context).showSnackBar(SnackBar(
+          content: Text('${label.toLowerCase()} failed — ${_short('$e')}'),
+          action: SnackBarAction(
+              label: 'Details',
+              onPressed: () => Scrollable.ensureVisible(context)),
+        ));
+      }
     } finally {
       if (mounted) {
         setState(() {
@@ -76,6 +105,19 @@ class _DevicePageState extends State<DevicePage> {
         });
       }
     }
+  }
+
+  /// Snackbars are one line on a phone; a Dart exception is often three.
+  static String _short(String e) =>
+      e.length <= 90 ? e : '${e.substring(0, 90)}…';
+
+  /// Persist whatever is in the credential fields.
+  ///
+  /// Called from both the Test button and either field's submit, so a user
+  /// who types a token and taps Test does not silently test the old one.
+  Future<void> _saveAuth() async {
+    await cloud.setAuth(_userCtl.text, _passCtl.text);
+    if (mounted) setState(() {});
   }
 
   Future<void> _refreshCounts() async {
@@ -355,10 +397,56 @@ class _DevicePageState extends State<DevicePage> {
                       },
                     ),
                     const SizedBox(height: 10),
+                    // The credential belongs beside the URL it authenticates
+                    // to. Without these fields, pointing the app at another
+                    // server left no way to authenticate to it: every sync
+                    // answered 401 and the outbox simply paused.
+                    Row(children: [
+                      Expanded(
+                        child: TextField(
+                          controller: _userCtl,
+                          autocorrect: false,
+                          enableSuggestions: false,
+                          decoration: const InputDecoration(
+                            labelText: 'Username',
+                            isDense: true,
+                            border: OutlineInputBorder(),
+                          ),
+                          onSubmitted: (_) => _saveAuth(),
+                        ),
+                      ),
+                      const SizedBox(width: 8),
+                      Expanded(
+                        child: TextField(
+                          controller: _passCtl,
+                          obscureText: !_showPass,
+                          autocorrect: false,
+                          enableSuggestions: false,
+                          decoration: InputDecoration(
+                            labelText: 'Token',
+                            isDense: true,
+                            border: const OutlineInputBorder(),
+                            suffixIcon: IconButton(
+                              tooltip: _showPass ? 'Hide token' : 'Show token',
+                              icon: Icon(
+                                  _showPass
+                                      ? Icons.visibility_off
+                                      : Icons.visibility,
+                                  size: 18),
+                              onPressed: () =>
+                                  setState(() => _showPass = !_showPass),
+                            ),
+                          ),
+                          onSubmitted: (_) => _saveAuth(),
+                        ),
+                      ),
+                    ]),
+                    const SizedBox(height: 10),
                     Wrap(spacing: 8, runSpacing: 8, children: [
                       OutlinedButton.icon(
                         onPressed: () async {
                           await cloud.setBaseUrl(_urlCtl.text);
+                          await _saveAuth();
                           final ok = await cloud.ping();
                           if (!context.mounted) return;
                           ScaffoldMessenger.of(context).showSnackBar(SnackBar(
@@ -516,8 +604,19 @@ class _DevicePageState extends State<DevicePage> {
           if (busy) ...[
             const LinearProgressIndicator(minHeight: 3),
             const SizedBox(height: 8),
-            Text(busyLabel,
-                style: t.textTheme.bodySmall?.copyWith(color: kMuted)),
+            StreamBuilder<void>(
+              stream: SyncService.instance.changes,
+              builder: (context, _) {
+                final svc = SyncService.instance;
+                final detail = [
+                  busyLabel,
+                  if (svc.busy && svc.phase.isNotEmpty) svc.phase,
+                  if (svc.storedThisRun > 0) '${svc.storedThisRun} stored',
+                ].where((s) => s.isNotEmpty).join(' · ');
+                return Text(detail,
+                    style: t.textTheme.bodySmall?.copyWith(color: kMuted));
+              },
+            ),
             const SizedBox(height: 12),
           ],
           _detailsCard(t),
@@ -534,7 +633,83 @@ class _DevicePageState extends State<DevicePage> {
     );
   }
 
+  /// Why a scan cannot find anything, and the one control that fixes it.
+  ///
+  /// Sits ABOVE the scan card, because when it is showing, tapping Scan is
+  /// not the next thing to do — it is the thing that will keep appearing to
+  /// do nothing.
+  Widget? _blockerCard(ThemeData t) {
+    final (String title, String body, String? action, VoidCallback? onTap) =
+        switch (link.blocker) {
+      BleBlocker.none => ('', '', null, null),
+      BleBlocker.unsupported => (
+          'This phone has no Bluetooth LE',
+          'The band talks over Bluetooth Low Energy, and this device does not '
+              'have it. Nothing here will find a band.',
+          null,
+          null,
+        ),
+      BleBlocker.adapterOff => (
+          'Bluetooth is off',
+          'The band is found over Bluetooth, so it has to be switched on '
+              'before a scan can see anything.',
+          'Turn on Bluetooth',
+          () async {
+            await link.requestAdapterOn();
+            if (mounted) setState(() {});
+          },
+        ),
+      BleBlocker.permissionDenied => (
+          'Bluetooth permission not granted',
+          'Android needs your permission before this app can look for nearby '
+              'bands. Nothing is sent anywhere — the permission is only used '
+              'to find and talk to your band.',
+          'Ask again',
+          () async {
+            await link.preflight();
+            if (mounted) setState(() {});
+          },
+        ),
+      BleBlocker.permissionPermanentlyDenied => (
+          'Bluetooth permission is blocked',
+          'The permission was declined for good, so Android will not ask '
+              'again from inside the app. It can still be granted from the '
+              'app settings — Permissions, then Nearby devices.',
+          'Open app settings',
+          () => link.openPermissionSettings(),
+        ),
+    };
+    if (title.isEmpty) return null;
+
+    return Card(
+      color: kBad.withValues(alpha: 0.10),
+      child: Padding(
+        padding: const EdgeInsets.all(16),
+        child: Column(crossAxisAlignment: CrossAxisAlignment.start, children: [
+          Row(children: [
+            Icon(Icons.error_outline, size: 18, color: kBad),
+            const SizedBox(width: 8),
+            Expanded(
+                child: Text(title,
+                    style: t.textTheme.titleSmall?.copyWith(color: kBad))),
+          ]),
+          const SizedBox(height: 6),
+          Text(body, style: t.textTheme.bodySmall),
+          if (action != null) ...[
+            const SizedBox(height: 12),
+            SizedBox(
+              width: double.infinity,
+              child: FilledButton(onPressed: onTap, child: Text(action)),
+            ),
+          ],
+        ]),
+      ),
+    );
+  }
+
   List<Widget> _disconnected(ThemeData t) => [
+        ?_blockerCard(t),
+        if (link.blocker != BleBlocker.none) const SizedBox(height: 12),
         SectionCard(
           title: 'Not connected',
           subtitle: 'Your band holds one Bluetooth link at a time',
@@ -645,6 +820,7 @@ class _DevicePageState extends State<DevicePage> {
                 stream: SyncService.instance.changes,
                 builder: (context, _) {
                   final syncing = SyncService.instance.busy;
+                  final svc = SyncService.instance;
                   return FilledButton.tonalIcon(
                     onPressed: (busy || syncing) ? null : _sync,
                     icon: syncing
@@ -653,7 +829,12 @@ class _DevicePageState extends State<DevicePage> {
                             height: 18,
                             child: CircularProgressIndicator(strokeWidth: 2))
                         : const Icon(Icons.sync, size: 18),
-                    label: Text(syncing ? 'Syncing…' : 'Sync history'),
+                    // The phase, not just "Syncing…": this walks every history
+                    // opcode the band answers and can take minutes, and a bare
+                    // spinner cannot be told apart from a stuck one.
+                    label: Text(syncing
+                        ? (svc.phase.isEmpty ? 'Syncing…' : svc.phase)
+                        : 'Sync history'),
                   );
                 },
               ),

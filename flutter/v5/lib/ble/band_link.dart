@@ -7,15 +7,44 @@
 library;
 
 import 'dart:async';
+import 'dart:io' show Platform;
 import 'dart:typed_data';
 
 import 'package:flutter/foundation.dart';
 import 'package:flutter_blue_plus/flutter_blue_plus.dart';
+import 'package:permission_handler/permission_handler.dart';
 
 import '../data/profile.dart';
 import '../protocol/jstyle.dart' as j;
 
 enum LinkState { idle, scanning, connecting, connected }
+
+/// Why a scan or connect could not even be attempted.
+///
+/// Before this existed all four of these produced the same outcome — an empty
+/// result and one line in the activity log — so a refused permission looked
+/// exactly like a band that was not there. The user tapped Scan, watched a
+/// progress bar, and got nothing, forever, with the explanation three screens
+/// down in a monospace debug list.
+enum BleBlocker {
+  /// Nothing in the way.
+  none,
+
+  /// No BLE radio at all. Nothing the user can do; say so and stop offering.
+  unsupported,
+
+  /// Bluetooth is switched off. Recoverable, and on Android we can ask.
+  adapterOff,
+
+  /// Scan or connect permission refused. Recoverable from the app settings.
+  permissionDenied,
+
+  /// Refused twice, or refused with "don't ask again". The in-app prompt will
+  /// no longer appear at all, so the ONLY route is the system settings page —
+  /// which is exactly the state that has to be said out loud rather than
+  /// retried.
+  permissionPermanentlyDenied,
+}
 
 /// A band seen during a scan, scored by how likely it is to be one of ours.
 class Candidate {
@@ -132,6 +161,85 @@ class BandLink {
   bool get connected =>
       state == LinkState.connected && (device?.isConnected ?? false);
 
+  /// Why the last scan or connect could not start. [BleBlocker.none] once one
+  /// has succeeded, so the UI can clear the explanation as soon as it stops
+  /// being true.
+  BleBlocker blocker = BleBlocker.none;
+
+  /// Everything that must be true before a scan can find anything, checked in
+  /// the order the user can act on.
+  ///
+  /// Returns [BleBlocker.none] when the way is clear. Requests the permission
+  /// if it has not been asked for yet — asking is cheap and the system dialog
+  /// is a better explanation than anything this app could write.
+  Future<BleBlocker> preflight({bool requesting = true}) async {
+    try {
+      return blocker = await _preflight(requesting);
+    } on UnsupportedError {
+      // No platform implementation at all — a widget test, or a desktop host.
+      // Not a blocker: reporting "this phone has no Bluetooth" on a test
+      // harness would be a false statement about the user's hardware, and the
+      // scan that follows fails with its own message anyway.
+      return blocker = BleBlocker.none;
+    } catch (e) {
+      // Any other failure asking the platform. Same reasoning: an unknown is
+      // not evidence, and the card must only claim what was actually checked.
+      _log('could not check Bluetooth readiness: $e');
+      return blocker = BleBlocker.none;
+    }
+  }
+
+  Future<BleBlocker> _preflight(bool requesting) async {
+    if (!await FlutterBluePlus.isSupported) {
+      _log('this phone has no Bluetooth LE radio');
+      return BleBlocker.unsupported;
+    }
+
+    // Permission before adapter state: on Android 12+ reading the adapter
+    // reliably needs the permission anyway, and asking first means the user
+    // answers one dialog rather than being sent to settings and back.
+    if (Platform.isAndroid || Platform.isIOS) {
+      final needed = Platform.isAndroid
+          ? const [Permission.bluetoothScan, Permission.bluetoothConnect]
+          : const [Permission.bluetooth];
+      for (final p in needed) {
+        var status = await p.status;
+        if (status.isDenied && requesting) status = await p.request();
+        if (status.isPermanentlyDenied) {
+          _log('${p.toString().split('.').last} permanently denied — '
+              'it can only be granted from the app settings now');
+          return BleBlocker.permissionPermanentlyDenied;
+        }
+        if (!status.isGranted && !status.isLimited) {
+          _log('${p.toString().split('.').last} not granted');
+          return BleBlocker.permissionDenied;
+        }
+      }
+    }
+
+    final adapter = await _adapterState();
+    if (adapter != BluetoothAdapterState.on) {
+      _log('Bluetooth is ${adapter.name}');
+      return BleBlocker.adapterOff;
+    }
+    return BleBlocker.none;
+  }
+
+  /// Ask Android to switch Bluetooth on. No-op elsewhere — iOS has no such
+  /// API, and the card offers different words there.
+  Future<void> requestAdapterOn() async {
+    if (!Platform.isAndroid) return;
+    try {
+      await FlutterBluePlus.turnOn();
+    } catch (e) {
+      _log('could not turn Bluetooth on: $e');
+    }
+    await preflight(requesting: false);
+    _emit();
+  }
+
+  Future<bool> openPermissionSettings() => openAppSettings();
+
   // ------------------------------------------------------------- adapter
 
   /// Wait for a real adapter state.
@@ -182,13 +290,11 @@ class BandLink {
   Future<List<Candidate>> scan({
     Duration timeout = const Duration(seconds: 20),
   }) async {
-    if (!await FlutterBluePlus.isSupported) {
-      _log('Bluetooth is not supported on this device');
-      return const [];
-    }
-    final adapter = await _adapterState();
-    if (adapter != BluetoothAdapterState.on) {
-      _log('Bluetooth is ${adapter.name} — turn it on, then scan again');
+    if (await preflight() != BleBlocker.none) {
+      // The reason is on `blocker`, and DevicePage renders it as a card with
+      // the one action that clears it. Returning empty quietly is what made
+      // this indistinguishable from "no bands nearby".
+      _emit();
       return const [];
     }
 
@@ -533,7 +639,7 @@ class BandLink {
       if (id == null || id.isEmpty) return false;
 
       if (!await FlutterBluePlus.isSupported) return false;
-      if (await _adapterState() != BluetoothAdapterState.on) {
+      if (await preflight(requesting: false) != BleBlocker.none) {
         _log('last band: Bluetooth is off');
         return false;
       }

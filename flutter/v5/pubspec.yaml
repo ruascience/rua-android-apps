@@ -42,6 +42,10 @@ dependencies:
   intl: ^0.20.3
   shared_preferences: ^2.5.5
   http: ^1.2.2
+  # Explicit permission state and a route to the system settings page. Without
+  # it a refused Bluetooth permission is indistinguishable from a band that is
+  # not there: the scan simply returns nothing.
+  permission_handler: ^12.0.1
 
 dev_dependencies:
   flutter_test:
