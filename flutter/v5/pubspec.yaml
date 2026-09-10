@@ -46,6 +46,10 @@ dependencies:
   # it a refused Bluetooth permission is indistinguishable from a band that is
   # not there: the scan simply returns nothing.
   permission_handler: ^12.0.1
+  # The share sheet, so the CSV the store has always been able to produce can
+  # actually leave the phone.
+  share_plus: ^12.0.1
+  path_provider: ^2.1.5
 
 dev_dependencies:
   flutter_test:

@@ -838,6 +838,36 @@ jyhn7zPAyvS/SaEpVHhuQqTEmCXhVlF8U9P2gm2e1crp5ZG/BTwi/MpzI3cSOGlL
   static String _short(String s) =>
       s.length <= 120 ? s : '${s.substring(0, 120)}…';
 
+  /// Ask the server to erase this band: samples, sleep segments and profile.
+  ///
+  /// The server disables the credential in the same call, so this is one-way
+  /// and the phone cannot quietly resume syncing afterwards. Returns null when
+  /// the request could not be made at all, which the caller must NOT treat as
+  /// success — "we could not reach the server" and "the server deleted it" are
+  /// the two answers a withdrawal must never confuse.
+  Future<Map<String, dynamic>?> eraseOnServer(String device) async {
+    try {
+      final res = await _client
+          .delete(
+            Uri.parse('$baseUrl/api/v1/devices/${Uri.encodeComponent(device)}'),
+            headers: _authHeaders,
+          )
+          .timeout(const Duration(seconds: 20));
+      if (res.statusCode < 200 || res.statusCode >= 300) {
+        lastError = 'erase failed ${res.statusCode}';
+        _emit();
+        return null;
+      }
+      final body = jsonDecode(res.body);
+      return body is Map<String, dynamic> ? body : <String, dynamic>{};
+    } catch (e) {
+      _resetClient();
+      lastError = _short('$e');
+      _emit();
+      return null;
+    }
+  }
+
   /// Is the server there? Used by the UI's Test button only.
   ///
   /// Deliberately NOT /actuator/health. Actuator is served on a second port

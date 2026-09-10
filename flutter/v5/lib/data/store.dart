@@ -586,6 +586,48 @@ class Store {
         limit: limit);
   }
 
+  /// Delete samples older than [keep], and report how many went.
+  ///
+  /// Nothing expired before this. The phone is the declared system of record,
+  /// so continuous sampling wrote to SQLite indefinitely: roughly 288 rows per
+  /// metric per day across six metrics is on the order of half a million rows
+  /// a year, none of which can be displayed anyway — reads are capped, and
+  /// every page asks for a window of days.
+  ///
+  /// Sleep segments are NOT pruned. There is one per night rather than one per
+  /// five minutes, so they cost almost nothing, and a night's sleep is the
+  /// kind of record someone looks back at a year later.
+  Future<int> pruneSamplesOlderThan(Duration keep) async {
+    final d = await db;
+    final cutoff =
+        DateTime.now().toUtc().subtract(keep).millisecondsSinceEpoch;
+    final n = await d.delete('samples', where: 'at < ?', whereArgs: [cutoff]);
+    if (n > 0) _bump();
+    return n;
+  }
+
+  /// Everything this phone holds for one band, gone.
+  ///
+  /// The local half of a withdrawal. Deliberately explicit about what it
+  /// touches rather than dropping the database file: the profile row and the
+  /// sync bookkeeping live here too, and a partial erase that left the outbox
+  /// pointing at deleted rows would resend nothing and report a backlog
+  /// forever.
+  Future<Map<String, int>> eraseDevice(String device) async {
+    final d = await db;
+    final out = <String, int>{};
+    await d.transaction((txn) async {
+      out['samples'] =
+          await txn.delete('samples', where: 'device = ?', whereArgs: [device]);
+      out['sleep_segments'] = await txn
+          .delete('sleep_segments', where: 'device = ?', whereArgs: [device]);
+      out['raw_frames'] = await txn
+          .delete('raw_frames', where: 'device = ?', whereArgs: [device]);
+    });
+    _bump();
+    return out;
+  }
+
   Future<String> exportCsv(String device) async {
     final d = await db;
     final rows = await d.query('samples',

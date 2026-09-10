@@ -156,6 +156,17 @@ class SyncService {
         }
         _changes.add(null);
       }
+      // Retention, after the pull rather than before it: a sync is the only
+      // moment new rows arrive, so it is the only moment the total can have
+      // grown. Nothing expired at all before this, and nothing displays rows
+      // this old either — every page reads a window of days and the reads are
+      // capped — so the storage was pure cost.
+      //
+      // A year and a bit, so that "this time last year" still works and a
+      // yearly comparison does not fall off the end of the window it needs.
+      final pruned =
+          await Store.instance.pruneSamplesOlderThan(const Duration(days: 400));
+      if (pruned > 0) _link.log.add('pruned $pruned samples over 400 days old');
     } catch (e) {
       // Recorded rather than swallowed. A sync that failed halfway used to be
       // indistinguishable from one that finished: the spinner stopped either

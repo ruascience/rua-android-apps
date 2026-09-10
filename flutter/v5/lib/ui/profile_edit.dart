@@ -96,6 +96,42 @@ class _ProfileEditPageState extends State<ProfileEditPage> {
     if (picked != null) setState(() => _periodStart = picked);
   }
 
+  /// Kept in state rather than read from the profile at build time, so the
+  /// screen behaves like the rest of the form: nothing is applied until Save.
+  UnitSystem _units = Profile.instance.units;
+  late final TextEditingController _goalSteps = TextEditingController(
+      text: Profile.instance.goals.steps.toString());
+  late final TextEditingController _goalKcal = TextEditingController(
+      text: Profile.instance.goals.kcal.toString());
+  late final TextEditingController _goalActive = TextEditingController(
+      text: Profile.instance.goals.activeMinutes.toString());
+
+  /// Null while the user has not overridden anything, so the targets keep
+  /// following the profile — a weight change should move a suggested calorie
+  /// goal and must not move one that was typed by hand.
+  bool _goalsTouched = Profile.instance.goalsAreCustom;
+
+  Future<void> _saveSettings() async {
+    await Profile.instance.setUnits(_units);
+    if (_goalsTouched) {
+      final steps = int.tryParse(_goalSteps.text.trim());
+      final kcal = int.tryParse(_goalKcal.text.trim());
+      final active = int.tryParse(_goalActive.text.trim());
+      // Distance follows steps and height rather than being a fourth box:
+      // it is the same walk measured differently, and two numbers that can
+      // disagree about one thing is how a target stops meaning anything.
+      final suggested = Profile.instance.goals;
+      await Profile.instance.setGoals(Goals(
+        steps: steps ?? suggested.steps,
+        kcal: kcal ?? suggested.kcal,
+        km: double.parse(
+            ((steps ?? suggested.steps) * (Profile.instance.heightCm * 0.415 / 100) / 1000)
+                .toStringAsFixed(1)),
+        activeMinutes: active ?? suggested.activeMinutes,
+      ));
+    }
+  }
+
   Future<void> _save() async {
     if (!(_form.currentState?.validate() ?? false)) return;
     // Captured before the awaits: the screen may be gone by the time an error
@@ -142,6 +178,9 @@ class _ProfileEditPageState extends State<ProfileEditPage> {
         email: _email.text.trim(),
         lastPeriodStart: _periodStart,
       );
+      // After the profile, because a suggested goal is derived from the
+      // height and weight that were just written.
+      await _saveSettings();
     } catch (e) {
       // Storage can fail — a full disk, a half-applied migration. Say so and
       // leave the screen up with the answers still in it, rather than popping
@@ -289,6 +328,96 @@ class _ProfileEditPageState extends State<ProfileEditPage> {
               'pick the new figures up straight away rather than at the next '
               'sync.',
               style: t.textTheme.bodySmall?.copyWith(color: kMuted),
+            ),
+            const SizedBox(height: 12),
+            SectionCard(
+              title: 'Display and goals',
+              subtitle: 'how figures are shown, and what they are measured against',
+              child: Column(
+                crossAxisAlignment: CrossAxisAlignment.start,
+                children: [
+                  Text('Units', style: t.textTheme.labelLarge),
+                  const SizedBox(height: 8),
+                  SegmentedButton<UnitSystem>(
+                    segments: const [
+                      ButtonSegment(
+                          value: UnitSystem.metric,
+                          label: Text('kg · cm · km · °C')),
+                      ButtonSegment(
+                          value: UnitSystem.imperial,
+                          label: Text('lb · ft · mi · °F')),
+                    ],
+                    selected: {_units},
+                    onSelectionChanged: (v) => setState(() => _units = v.first),
+                  ),
+                  const SizedBox(height: 6),
+                  Text(
+                    'Display only. Everything is stored in metric whatever '
+                    'this says, so switching back and forth never changes a '
+                    'recorded value.',
+                    style: t.textTheme.bodySmall?.copyWith(color: kMuted),
+                  ),
+                  const Divider(height: 28),
+                  Row(children: [
+                    Expanded(child: Text('Daily goals', style: t.textTheme.labelLarge)),
+                    if (_goalsTouched)
+                      TextButton(
+                        onPressed: () async {
+                          await Profile.instance.setGoals(null);
+                          if (!mounted) return;
+                          setState(() {
+                            _goalsTouched = false;
+                            final g = Profile.instance.goals;
+                            _goalSteps.text = g.steps.toString();
+                            _goalKcal.text = g.kcal.toString();
+                            _goalActive.text = g.activeMinutes.toString();
+                          });
+                        },
+                        child: const Text('Use suggested'),
+                      ),
+                  ]),
+                  const SizedBox(height: 4),
+                  Text(
+                    _goalsTouched
+                        ? 'Your own targets.'
+                        : 'Suggested from your height and weight — a heavier '
+                            'person burns more on the same walk, and stride '
+                            'length is what turns steps into distance. Edit '
+                            'any of them to set your own.',
+                    style: t.textTheme.bodySmall?.copyWith(color: kMuted),
+                  ),
+                  const SizedBox(height: 12),
+                  Row(children: [
+                    Expanded(
+                      child: TextFormField(
+                        controller: _goalSteps,
+                        keyboardType: TextInputType.number,
+                        decoration: const InputDecoration(labelText: 'Steps'),
+                        onChanged: (_) => setState(() => _goalsTouched = true),
+                      ),
+                    ),
+                    const SizedBox(width: 12),
+                    Expanded(
+                      child: TextFormField(
+                        controller: _goalKcal,
+                        keyboardType: TextInputType.number,
+                        decoration: const InputDecoration(labelText: 'Calories'),
+                        onChanged: (_) => setState(() => _goalsTouched = true),
+                      ),
+                    ),
+                    const SizedBox(width: 12),
+                    Expanded(
+                      child: TextFormField(
+                        controller: _goalActive,
+                        keyboardType: TextInputType.number,
+                        decoration:
+                            const InputDecoration(labelText: 'Active min'),
+                        onChanged: (_) => setState(() => _goalsTouched = true),
+                      ),
+                    ),
+                  ]),
+                ],
+              ),
             ),
           ],
         ),

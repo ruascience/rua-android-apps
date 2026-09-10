@@ -27,6 +27,9 @@ library;
 
 import 'package:flutter/material.dart';
 
+import '../data/profile.dart';
+import 'profile_edit.dart' show formatWeightKg;
+
 import '../analytics/metrics.dart';
 
 /// Warm near-black — the brand's paper, inverted, not a blue-black screen.
@@ -500,4 +503,52 @@ class EmptyState extends StatelessWidget {
       ]),
     );
   }
+}
+
+// ---------------------------------------------------------------- units
+
+/// Display formatting for the two unit systems.
+///
+/// Conversion happens HERE, at the edge, and never on the way into storage.
+/// Every stored value stays metric — the band reports metric, the server
+/// stores metric, and a column holding both would be the same class of bug as
+/// the `metric` field that once meant two different things.
+class Units {
+  final UnitSystem system;
+  const Units(this.system);
+
+  factory Units.of(Profile p) => Units(p.units);
+
+  bool get imperial => system == UnitSystem.imperial;
+
+  String distance(double km) => imperial
+      ? '${(km * 0.621371).toStringAsFixed(2)} mi'
+      : '${km.toStringAsFixed(2)} km';
+
+  String distanceValue(double km) => imperial
+      ? (km * 0.621371).toStringAsFixed(2)
+      : km.toStringAsFixed(2);
+
+  String get distanceUnit => imperial ? 'mi' : 'km';
+
+  String weight(double kg) => imperial
+      ? '${(kg * 2.20462).round()} lb'
+      : '${formatWeightKg(kg)} kg';
+
+  /// Feet and inches, because 5'9" is how the height of a person is said in
+  /// the places that use it — "69 in" is a conversion, not a unit anyone uses.
+  String height(int cm) {
+    if (!imperial) return '$cm cm';
+    final totalInches = (cm / 2.54).round();
+    return "${totalInches ~/ 12}'${totalInches % 12}\"";
+  }
+
+  String temperature(double celsius) => imperial
+      ? '${(celsius * 9 / 5 + 32).toStringAsFixed(1)} °F'
+      : '${celsius.toStringAsFixed(1)} °C';
+
+  String get temperatureUnit => imperial ? '°F' : '°C';
+
+  double temperatureValue(double celsius) =>
+      imperial ? celsius * 9 / 5 + 32 : celsius;
 }

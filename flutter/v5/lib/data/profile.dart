@@ -69,6 +69,50 @@ typedef ProfileIdLookup = Future<ProfileLookupResult> Function(
 /// to duplicate.
 typedef ProfileMintGate = Future<bool> Function();
 
+/// Which units the app SHOWS. Storage stays metric either way — converting on
+/// the way in would put two vocabularies in one column, which is the shape of
+/// bug this project has already been bitten by once.
+enum UnitSystem { metric, imperial }
+
+/// The daily targets the Activity rings are drawn against.
+///
+/// These were four hardcoded constants — 10,000 / 400 / 5 / 30 — in a page
+/// belonging to an app whose first-run sheet BLOCKS until it knows the user's
+/// age, sex, height and weight, precisely because the derived numbers need
+/// them. Comparing that person against a round number nobody chose was the
+/// one place the app stopped being about them.
+class Goals {
+  final int steps;
+  final int kcal;
+  final double km;
+  final int activeMinutes;
+  const Goals({
+    required this.steps,
+    required this.kcal,
+    required this.km,
+    required this.activeMinutes,
+  });
+
+  /// Starting points, from the profile rather than from a poster.
+  ///
+  /// Calories scale with body mass because a 55 kg and a 95 kg person doing
+  /// the same walk do not burn the same amount; step distance scales with
+  /// height because it is stride length that turns steps into kilometres.
+  /// Both are rounded hard — these are targets, not measurements, and a goal
+  /// of "417 kcal" would imply a precision that is not there.
+  factory Goals.suggested({required int heightCm, required double weightKg}) {
+    final kcal = ((weightKg * 5).round() / 25).round() * 25;
+    final strideM = heightCm * 0.415 / 100;
+    final km = ((10000 * strideM) / 1000);
+    return Goals(
+      steps: 10000,
+      kcal: kcal.clamp(200, 1200),
+      km: double.parse(km.clamp(2.0, 12.0).toStringAsFixed(1)),
+      activeMinutes: 30,
+    );
+  }
+}
+
 class Profile {
   Profile._();
   static final Profile instance = Profile._();
@@ -92,6 +136,11 @@ class Profile {
   static const _kWeight = 'profile.weight_kg';
   static const _kPeriods = 'profile.period_starts';
   static const _kBandId = 'band.remote_id';
+  static const _kUnits = 'profile.units';
+  static const _kGoalSteps = 'goal.steps';
+  static const _kGoalKcal = 'goal.kcal';
+  static const _kGoalKm = 'goal.km';
+  static const _kGoalActive = 'goal.active';
   static const _kBandName = 'band.internal_name';
   static const _kBandDisplay = 'band_display_name';
 
@@ -99,6 +148,20 @@ class Profile {
   Sex sex = Sex.unspecified;
   int heightCm = 170;
   double weightKg = 70;
+
+  /// Display units. Metric by default, because that is what the band reports
+  /// and what every stored value is in.
+  UnitSystem units = UnitSystem.metric;
+
+  /// Null until the user has set one, so [goals] can keep following the
+  /// profile — a weight change should move a suggested calorie target, and
+  /// must not move one the user typed themselves.
+  Goals? _customGoals;
+
+  Goals get goals =>
+      _customGoals ?? Goals.suggested(heightCm: heightCm, weightKg: weightKg);
+
+  bool get goalsAreCustom => _customGoals != null;
   List<DateTime> periodStarts = [];
 
   /// The BLE address of the band we last connected to, and the internal name
@@ -163,6 +226,17 @@ class Profile {
     // outliving the test that started it.
     if (_loaded) return;
     final p = await _p;
+    units = UnitSystem.values[
+        (p.getInt(_kUnits) ?? UnitSystem.metric.index)
+            .clamp(0, UnitSystem.values.length - 1)];
+    if (p.containsKey(_kGoalSteps)) {
+      _customGoals = Goals(
+        steps: p.getInt(_kGoalSteps) ?? 10000,
+        kcal: p.getInt(_kGoalKcal) ?? 400,
+        km: p.getDouble(_kGoalKm) ?? 5,
+        activeMinutes: p.getInt(_kGoalActive) ?? 30,
+      );
+    }
     bandId = p.getString(_kBandId);
     bandInternalName = p.getString(_kBandName);
     bandDisplayName = p.getString(_kBandDisplay);
@@ -204,6 +278,24 @@ class Profile {
     _loaded = true;
   }
 
+  Future<void> setUnits(UnitSystem u) async {
+    units = u;
+    await save();
+  }
+
+  /// Pass null to go back to following the profile.
+  Future<void> setGoals(Goals? g) async {
+    _customGoals = g;
+    if (g == null) {
+      final p = await _p;
+      await p.remove(_kGoalSteps);
+      await p.remove(_kGoalKcal);
+      await p.remove(_kGoalKm);
+      await p.remove(_kGoalActive);
+    }
+    await save();
+  }
+
   Future<void> save() async {
     await Store.instance.writeProfile(
       name: name,
@@ -222,6 +314,13 @@ class Profile {
     await Store.instance.writePeriodStarts(periodStarts);
 
     final p = await _p;
+    await p.setInt(_kUnits, units.index);
+    if (_customGoals != null) {
+      await p.setInt(_kGoalSteps, _customGoals!.steps);
+      await p.setInt(_kGoalKcal, _customGoals!.kcal);
+      await p.setDouble(_kGoalKm, _customGoals!.km);
+      await p.setInt(_kGoalActive, _customGoals!.activeMinutes);
+    }
     if (bandId != null) await p.setString(_kBandId, bandId!);
     if (bandDisplayName != null) {
       await p.setString(_kBandDisplay, bandDisplayName!);

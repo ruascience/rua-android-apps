@@ -254,7 +254,9 @@ class _HomePageState extends State<HomePage> {
               _metricCard(t, 'Blood Oxygen', spo2, '%', kAccent),
               const SizedBox(height: 12),
               if (temp.isNotEmpty)
-                _metricCard(t, 'Skin Temperature', temp, '°C', kWarn)
+                _metricCard(t, 'Skin Temperature', temp,
+                    Units.of(Profile.instance).temperatureUnit, kWarn,
+                    convert: Units.of(Profile.instance).temperatureValue)
               else
                 _temperatureUnavailable(t),
             ],
@@ -322,33 +324,37 @@ class _HomePageState extends State<HomePage> {
                   ),
                 ),
               ])
-            : Row(children: [
+            : Builder(builder: (context) {
+                final g = Profile.instance.goals;
+                final u = Units.of(Profile.instance);
+                return Row(children: [
           ActivityRings(
               steps: steps,
-              stepGoal: 10000,
+              stepGoal: g.steps.toDouble(),
               kcal: kcal,
-              kcalGoal: 400,
+              kcalGoal: g.kcal.toDouble(),
               km: km,
-              kmGoal: 5),
+              kmGoal: g.km),
           const SizedBox(width: 22),
           Expanded(
             child: Column(children: [
-              _goalRow(t, 'Steps', steps.round().toString(), '10,000',
-                  kAccent),
+              _goalRow(t, 'Steps', steps.round().toString(),
+                  NumberFormat.decimalPattern().format(g.steps), kAccent),
               const SizedBox(height: 10),
-              _goalRow(t, 'Calories', kcal.toStringAsFixed(0), '400',
+              _goalRow(t, 'Calories', kcal.toStringAsFixed(0), '${g.kcal}',
                   kGreen),
               const SizedBox(height: 10),
-              _goalRow(t, 'Distance', km.toStringAsFixed(2), '5 km',
-                  kWarn),
+              _goalRow(t, 'Distance', u.distanceValue(km),
+                  u.distance(g.km), kWarn),
               if (activeMin > 0) ...[
                 const SizedBox(height: 10),
-                _goalRow(t, 'Active', '${activeMin.round()}', '30 min',
-                    kAccent2),
+                _goalRow(t, 'Active', '${activeMin.round()}',
+                    '${g.activeMinutes} min', kAccent2),
               ],
             ]),
           ),
-        ]),
+        ]);
+              }),
       );
 
   Widget _goalRow(
@@ -475,10 +481,16 @@ class _HomePageState extends State<HomePage> {
     Color colour, {
     String? extra,
     String? footnote,
+    /// Applied to displayed values only. Storage stays metric; see [Units].
+    double Function(double)? convert,
   }) {
-    final recent = data.length > 120 ? data.sublist(data.length - 120) : data;
-    final last = data.isEmpty ? null : data.last;
-    final vals = data.map((s) => s.value).toList();
+    final f = convert ?? (double v) => v;
+    final source =
+        convert == null ? data : [for (final s in data) Sample(s.at, f(s.value))];
+    final recent =
+        source.length > 120 ? source.sublist(source.length - 120) : source;
+    final last = source.isEmpty ? null : source.last;
+    final vals = source.map((s) => s.value).toList();
     final avg = vals.isEmpty
         ? null
         : vals.reduce((a, b) => a + b) / vals.length;

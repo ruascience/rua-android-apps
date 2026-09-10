@@ -1,6 +1,9 @@
 import 'dart:async';
+import 'dart:io';
 
 import 'package:flutter/material.dart';
+import 'package:path_provider/path_provider.dart';
+import 'package:share_plus/share_plus.dart';
 import 'package:intl/intl.dart';
 
 import '../ble/band_link.dart';
@@ -118,6 +121,88 @@ class _DevicePageState extends State<DevicePage> {
   Future<void> _saveAuth() async {
     await cloud.setAuth(_userCtl.text, _passCtl.text);
     if (mounted) setState(() {});
+  }
+
+  /// Hand the stored readings to the share sheet as a real file.
+  ///
+  /// The store has been able to produce this CSV all along and nothing called
+  /// it — a finished feature that existed only in the source. The card it now
+  /// sits on is the one that says "nothing leaves this phone", which is
+  /// exactly where someone would look to take their data with them.
+  Future<void> _export() => _run('Exporting', () async {
+        final dev = link.deviceName.isEmpty
+            ? (profile.bandDisplayName ?? '')
+            : link.deviceName;
+        if (dev.isEmpty) throw StateError('no band to export');
+        final csv = await Store.instance.exportCsv(dev);
+        final dir = await getTemporaryDirectory();
+        final stamp = DateFormat('yyyy-MM-dd').format(DateTime.now());
+        final f = File('${dir.path}/rua-$stamp.csv');
+        await f.writeAsString(csv);
+        await SharePlus.instance.share(ShareParams(
+          files: [XFile(f.path, mimeType: 'text/csv')],
+          subject: 'Rua Science readings — $dev',
+        ));
+      });
+
+  /// Erase everything, here and on the server, after saying exactly what goes.
+  ///
+  /// Two steps rather than one dialog: the server half can fail, and a
+  /// withdrawal that reported success while the readings were still in Atlas
+  /// would be the worst possible outcome for the one action a participant is
+  /// entitled to trust.
+  Future<void> _confirmErase() async {
+    final dev = link.deviceName.isEmpty
+        ? (profile.bandDisplayName ?? '')
+        : link.deviceName;
+    if (dev.isEmpty) return;
+    final total = counts.values.fold<int>(0, (a, b) => a + b);
+    final alsoServer = cloud.enabled;
+
+    final go = await showDialog<bool>(
+      context: context,
+      builder: (c) => AlertDialog(
+        title: const Text('Delete my data'),
+        content: Text(
+          'This removes $total stored readings for $dev from this phone'
+          '${alsoServer ? ', and asks the server to delete its copy — '
+              'readings, sleep and your profile.' : '.'}\n\n'
+          'It cannot be undone. Export first if you want to keep a copy.',
+        ),
+        actions: [
+          TextButton(
+              onPressed: () => Navigator.pop(c, false),
+              child: const Text('Cancel')),
+          FilledButton(
+            style: FilledButton.styleFrom(backgroundColor: kBad),
+            onPressed: () => Navigator.pop(c, true),
+            child: const Text('Delete everything'),
+          ),
+        ],
+      ),
+    );
+    if (go != true || !mounted) return;
+
+    await _run('Deleting', () async {
+      Map<String, dynamic>? server;
+      if (alsoServer) server = await cloud.eraseOnServer(dev);
+      final local = await Store.instance.eraseDevice(dev);
+      await Store.instance.resetSyncState();
+      await cloud.refreshPending();
+      await _refreshCounts();
+      if (!mounted) return;
+      final localTotal = local.values.fold<int>(0, (a, b) => a + b);
+      ScaffoldMessenger.of(context).showSnackBar(SnackBar(
+        content: Text(alsoServer && server == null
+            // Said plainly. The phone is clean either way, but claiming the
+            // server copy is gone when the call failed would be a lie about
+            // the one thing this dialog promised.
+            ? 'Deleted $localTotal rows from this phone. The server could '
+                'not be reached — its copy is still there.'
+            : 'Deleted $localTotal rows from this phone'
+                '${alsoServer ? ' and the server copy' : ''}.'),
+      ));
+    });
   }
 
   Future<void> _refreshCounts() async {
@@ -860,19 +945,33 @@ class _DevicePageState extends State<DevicePage> {
             title: 'Stored locally',
             subtitle: 'nothing leaves this phone',
             child: Column(
-              children: counts.entries
-                  .map((e) => Padding(
-                        padding: const EdgeInsets.symmetric(vertical: 3),
-                        child: Row(
-                          mainAxisAlignment: MainAxisAlignment.spaceBetween,
-                          children: [
-                            Text(e.key.replaceAll('_', ' '),
-                                style: TextStyle(color: kMuted)),
-                            Text('${e.value}'),
-                          ],
-                        ),
-                      ))
-                  .toList(),
+              crossAxisAlignment: CrossAxisAlignment.stretch,
+              children: [
+                ...counts.entries.map((e) => Padding(
+                      padding: const EdgeInsets.symmetric(vertical: 3),
+                      child: Row(
+                        mainAxisAlignment: MainAxisAlignment.spaceBetween,
+                        children: [
+                          Text(e.key.replaceAll('_', ' '),
+                              style: TextStyle(color: kMuted)),
+                          Text('${e.value}'),
+                        ],
+                      ),
+                    )),
+                const Divider(height: 24),
+                Wrap(spacing: 8, runSpacing: 8, children: [
+                  OutlinedButton.icon(
+                    onPressed: busy ? null : _export,
+                    icon: const Icon(Icons.ios_share, size: 16),
+                    label: const Text('Export CSV'),
+                  ),
+                  TextButton.icon(
+                    onPressed: busy ? null : _confirmErase,
+                    icon: Icon(Icons.delete_outline, size: 16, color: kBad),
+                    label: Text('Delete my data', style: TextStyle(color: kBad)),
+                  ),
+                ]),
+              ],
             ),
           ),
         ],
