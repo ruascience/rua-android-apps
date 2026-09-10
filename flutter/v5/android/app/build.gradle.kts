@@ -1,5 +1,6 @@
 plugins {
     id("com.android.application")
+    id("com.google.gms.google-services")
     // The Flutter Gradle Plugin must be applied after the Android and Kotlin Gradle plugins.
     id("dev.flutter.flutter-gradle-plugin")
 }
@@ -46,4 +47,19 @@ kotlin {
 
 flutter {
     source = "../.."
+}
+
+dependencies {
+    // The BoM fixes one consistent set of Firebase versions, which is why the
+    // individual dependencies below carry none: adding a version there
+    // overrides the BoM and is how mismatched Firebase libraries get into a
+    // build.
+    implementation(platform("com.google.firebase:firebase-bom:34.19.0"))
+
+    // Analytics starts collecting device and usage data as soon as the app
+    // runs — no code required. Nothing in this app calls it; it is here
+    // because the Firebase console's setup flow includes it. Delete this line
+    // if that collection is not wanted. App Distribution does not need it, or
+    // any of the SDK: distributing a build needs only the APK and the app id.
+    implementation("com.google.firebase:firebase-analytics")
 }

@@ -1,0 +1,29 @@
+{
+  "project_info": {
+    "project_number": "475820602320",
+    "project_id": "rua-app-91f9f",
+    "storage_bucket": "rua-app-91f9f.firebasestorage.app"
+  },
+  "client": [
+    {
+      "client_info": {
+        "mobilesdk_app_id": "1:475820602320:android:60c36b05333f547d5f7fd5",
+        "android_client_info": {
+          "package_name": "com.abcom.aurav5"
+        }
+      },
+      "oauth_client": [],
+      "api_key": [
+        {
+          "current_key": "AIzaSyBFbXZIkyzR1Vz8ZRnTuBWGvW6QaxoQrXg"
+        }
+      ],
+      "services": {
+        "appinvite_service": {
+          "other_platform_oauth_client": []
+        }
+      }
+    }
+  ],
+  "configuration_version": "1"
+}

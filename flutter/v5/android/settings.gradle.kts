@@ -21,6 +21,12 @@ plugins {
     id("dev.flutter.flutter-plugin-loader") version "1.0.0"
     id("com.android.application") version "9.1.0" apply false
     id("org.jetbrains.kotlin.android") version "2.4.0" apply false
+    // Reads android/app/google-services.json and generates the resources the
+    // Firebase SDKs read at runtime. Declared here rather than in a root
+    // build.gradle: this project uses the current Flutter Gradle layout, where
+    // settings.gradle.kts is the plugin declaration point and there is no root
+    // plugins block to add it to.
+    id("com.google.gms.google-services") version "4.5.0" apply false
 }
 
 include(":app")
