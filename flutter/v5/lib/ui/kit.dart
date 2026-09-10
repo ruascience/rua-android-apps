@@ -162,12 +162,69 @@ ThemeData buildTheme([Brightness brightness = Brightness.dark]) {
       surface: p.card,
       error: p.bad,
     ),
+    // Material's default pill is `secondaryContainer` — a lavender that has
+    // nothing to do with this palette and read as a different app's chrome
+    // sitting under the tabs. The selection is the accent, at the weight
+    // everything else on the page uses.
+    navigationBarTheme: NavigationBarThemeData(
+      backgroundColor: p.card,
+      indicatorColor: p.accent.withValues(alpha: 0.13),
+      surfaceTintColor: Colors.transparent,
+      elevation: 0,
+      iconTheme: WidgetStateProperty.resolveWith((states) => IconThemeData(
+            size: 20,
+            color: states.contains(WidgetState.selected) ? p.accent : p.muted,
+          )),
+      labelTextStyle: WidgetStateProperty.resolveWith((states) => TextStyle(
+            fontFamily: kMono,
+            fontSize: 9.5,
+            letterSpacing: 1.0,
+            color: states.contains(WidgetState.selected) ? p.text : p.muted,
+          )),
+    ),
+    dividerTheme: DividerThemeData(color: p.rule, space: 1, thickness: 1),
+    // Hairline panels, not floating cards. An 18px radius and a fill that
+    // differs from the ground is a card FLOATING above the page; the redesign
+    // draws structure with 1px rules on a shared ground, so the corner goes
+    // and the border does the work.
     cardTheme: CardThemeData(
       color: p.card,
       elevation: 0,
       margin: EdgeInsets.zero,
       shape: RoundedRectangleBorder(
-          borderRadius: BorderRadius.all(Radius.circular(18))),
+        borderRadius: const BorderRadius.all(Radius.circular(2)),
+        side: BorderSide(color: p.rule),
+      ),
+    ),
+    // Controls follow the same geometry. A stadium-shaped button next to a
+    // square panel reads as two design systems in one screen.
+    filledButtonTheme: FilledButtonThemeData(
+      style: FilledButton.styleFrom(
+        shape: const RoundedRectangleBorder(
+            borderRadius: BorderRadius.all(Radius.circular(2))),
+        textStyle: const TextStyle(fontFamily: kSans, fontSize: 13.5, fontWeight: FontWeight.w500),
+        padding: const EdgeInsets.symmetric(horizontal: 16, vertical: 14),
+      ),
+    ),
+    outlinedButtonTheme: OutlinedButtonThemeData(
+      style: OutlinedButton.styleFrom(
+        shape: const RoundedRectangleBorder(
+            borderRadius: BorderRadius.all(Radius.circular(2))),
+        side: BorderSide(color: p.rule),
+        foregroundColor: p.text,
+        textStyle: const TextStyle(fontFamily: kSans, fontSize: 13.5, fontWeight: FontWeight.w500),
+        padding: const EdgeInsets.symmetric(horizontal: 16, vertical: 14),
+      ),
+    ),
+    chipTheme: ChipThemeData(
+      backgroundColor: p.card,
+      selectedColor: p.text,
+      side: BorderSide(color: p.rule),
+      shape: const RoundedRectangleBorder(
+          borderRadius: BorderRadius.all(Radius.circular(2))),
+      labelStyle: TextStyle(fontFamily: kMono, fontSize: 10.5, color: p.text),
+      secondaryLabelStyle: TextStyle(fontFamily: kMono, fontSize: 10.5, color: p.bg),
+      showCheckmark: false,
     ),
     // Serif for the figures, sans for the prose. The big numerals are the
     // thing you look at on a health screen, and Newsreader gives them a
