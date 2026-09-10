@@ -1,3 +1,18 @@
+import java.util.Properties
+
+// Release signing, read from android/key.properties, which is gitignored and
+// points at a keystore kept outside the repository.
+//
+// The keystore is not recoverable and not replaceable: an app already
+// installed can only be updated by a build signed with the SAME key, and Play
+// binds the listing to it permanently. Losing this file means every tester
+// uninstalls and reinstalls; publishing it means anyone can ship an update
+// that looks like ours.
+val keystoreProperties = Properties().apply {
+    val f = rootProject.file("key.properties")
+    if (f.exists()) f.inputStream().use { load(it) }
+}
+
 plugins {
     id("com.android.application")
     id("com.google.gms.google-services")
@@ -30,11 +45,33 @@ android {
         versionName = flutter.versionName
     }
 
+    signingConfigs {
+        create("release") {
+            // Only defined when key.properties is present. A checkout without
+            // it still builds debug; `release` then falls back below rather
+            // than failing at configuration time.
+            if (keystoreProperties.getProperty("storeFile") != null) {
+                storeFile = file(keystoreProperties.getProperty("storeFile"))
+                storeType = keystoreProperties.getProperty("storeType") ?: "PKCS12"
+                storePassword = keystoreProperties.getProperty("storePassword")
+                keyAlias = keystoreProperties.getProperty("keyAlias")
+                keyPassword = keystoreProperties.getProperty("keyPassword")
+            }
+        }
+    }
+
     buildTypes {
         release {
-            // TODO: Add your own signing config for the release build.
-            // Signing with the debug keys for now, so `flutter run --release` works.
-            signingConfig = signingConfigs.getByName("debug")
+            // Falls back to debug signing when key.properties is absent, so a
+            // fresh clone can still run --release. A build signed with the
+            // debug key must never be distributed: every machine has a
+            // different debug key, so testers cannot upgrade to a real release
+            // without uninstalling first, losing their local database.
+            signingConfig = if (keystoreProperties.getProperty("storeFile") != null) {
+                signingConfigs.getByName("release")
+            } else {
+                signingConfigs.getByName("debug")
+            }
         }
     }
 }
