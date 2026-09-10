@@ -1,6 +1,8 @@
 import 'dart:async';
 
 import 'package:fl_chart/fl_chart.dart';
+
+import 'kit.dart';
 import 'package:flutter/material.dart';
 import 'package:intl/intl.dart';
 
@@ -17,13 +19,18 @@ const _labels = {
   'stress': 'Stress',
 };
 
-class HistoryPage extends StatefulWidget {
-  const HistoryPage({super.key});
+/// The metric explorer, as a SECTION rather than a page.
+///
+/// It shares the Trends tab with [InsightsSection] now: one is "what has this
+/// number been doing", the other "what does it add up to", and splitting them
+/// across two tabs made you flip between them to answer one question.
+class HistorySection extends StatefulWidget {
+  const HistorySection({super.key});
   @override
-  State<HistoryPage> createState() => _HistoryPageState();
+  State<HistorySection> createState() => _HistorySectionState();
 }
 
-class _HistoryPageState extends State<HistoryPage> {
+class _HistorySectionState extends State<HistorySection> {
   String _metric = 'heart_rate';
   int _days = 7;
   List<Sample> _data = const [];
@@ -83,8 +90,8 @@ class _HistoryPageState extends State<HistoryPage> {
   @override
   Widget build(BuildContext context) {
     final t = Theme.of(context);
-    return ListView(
-      padding: const EdgeInsets.all(16),
+    return Column(
+      crossAxisAlignment: CrossAxisAlignment.stretch,
       children: [
         // No heading: the tab above this page says History.
         const SizedBox(height: 4),
@@ -131,6 +138,8 @@ class _HistoryPageState extends State<HistoryPage> {
         else if (_data.isEmpty)
           _empty(t)
         else ...[
+          _headline(t),
+          const SizedBox(height: 10),
           _stats(t),
           const SizedBox(height: 16),
           SizedBox(height: 260, child: _chart(t)),
@@ -151,6 +160,35 @@ class _HistoryPageState extends State<HistoryPage> {
               style: t.textTheme.bodySmall, textAlign: TextAlign.center),
         ]),
       );
+
+  /// The figure and its change, stated before the chart shows it.
+  ///
+  /// A line going down is only meaningful once you know what it is and by how
+  /// much; putting the sentence above the chart means the answer is readable
+  /// without interpreting the drawing, and the drawing then supports it.
+  Widget _headline(ThemeData t) {
+    final first = _data.first.value, last = _data.last.value;
+    final delta = last - first;
+    String f(double v) =>
+        _metric == 'temperature' ? v.toStringAsFixed(1) : v.round().toString();
+    final unit = _labels[_metric]!.contains('(')
+        ? _labels[_metric]!.split('(').last.replaceAll(')', '')
+        : '';
+    final word = delta.abs() < 0.5
+        ? 'no change'
+        : '${delta < 0 ? '↓' : '↑'} ${f(delta.abs())} $unit '
+            'in ${_days == 1 ? '24 hours' : '$_days days'}';
+    return Column(crossAxisAlignment: CrossAxisAlignment.start, children: [
+      Row(mainAxisAlignment: MainAxisAlignment.spaceBetween, children: [
+        Lab(_labels[_metric]!.split(' (').first),
+        // Down is not automatically good — a falling SpO2 is not a falling
+        // resting heart rate — so the colour says "changed", not "improved".
+        Lab(word, color: delta.abs() < 0.5 ? kMuted : kAccent),
+      ]),
+      const SizedBox(height: 4),
+      Figure(f(last), unit: unit.isEmpty ? '' : ' $unit', size: 40),
+    ]);
+  }
 
   Widget _stats(ThemeData t) {
     final vals = _data.map((s) => s.value).toList()..sort();

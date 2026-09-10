@@ -6,15 +6,14 @@ import 'package:flutter/material.dart';
 import 'ble/band_link.dart';
 import 'data/profile.dart';
 import 'ui/device_page.dart';
-import 'ui/history_page.dart';
 import 'ui/home_page.dart';
-import 'ui/insights_page.dart';
 import 'data/background.dart';
 import 'data/cloud_sync.dart';
 import 'data/sync_service.dart';
 import 'ui/kit.dart';
 import 'ui/onboarding.dart';
 import 'ui/sleep_page.dart';
+import 'ui/trends_page.dart';
 
 Future<void> main() async {
   final binding = WidgetsFlutterBinding.ensureInitialized();
@@ -205,32 +204,35 @@ class _ShellState extends State<Shell> {
   }
 
   /// Index of DevicePage in [_pages].
-  ///
-  /// Was 4 when every page had its own destination. Five became three by
-  /// pairing the two that answer "how am I doing" and the two that answer
-  /// "what do the numbers say"; Device answers neither and stays on its own.
-  static const _deviceTab = 2;
+  static const _deviceTab = 3;
 
-  /// Three destinations, five pages.
+  /// Four destinations, four pages — one tab bar, no nested tabs.
   ///
-  /// The pairs sit behind [_TabGroup], which keeps BOTH of its children built
-  /// and alive — see the note there. That matters more than it looks: every
-  /// one of these pages documents itself as "built once at startup, before any
-  /// band is connected", and several load from SQLite in `initState` on that
-  /// assumption. A lazily built tab would break that quietly.
+  /// It was three destinations with two of them holding a PAIR of pages behind
+  /// a second tab bar. Two rows of tabs is two things to learn, and the
+  /// pairing put Insights and History side by side when they are one question
+  /// asked twice — they are one Trends page now.
+  ///
+  /// Still an IndexedStack: every one of these pages documents itself as
+  /// "built once at startup, before any band is connected", and several load
+  /// from SQLite in `initState` on that assumption. Lazily building a tab
+  /// would break that quietly.
   static const _pages = [
-    _TabGroup(labels: ['Today', 'Sleep'], pages: [HomePage(), SleepPage()]),
-    _TabGroup(
-        labels: ['Insights', 'History'],
-        pages: [InsightsPage(), HistoryPage()]),
+    HomePage(),
+    SleepPage(),
+    TrendsPage(),
     DevicePage(),
   ];
 
   static const _dests = [
     NavigationDestination(
-        icon: Icon(Icons.home_outlined),
-        selectedIcon: Icon(Icons.home),
-        label: 'Home'),
+        icon: Icon(Icons.show_chart_outlined),
+        selectedIcon: Icon(Icons.show_chart),
+        label: 'Today'),
+    NavigationDestination(
+        icon: Icon(Icons.nightlight_outlined),
+        selectedIcon: Icon(Icons.nightlight),
+        label: 'Sleep'),
     NavigationDestination(
         icon: Icon(Icons.insights_outlined),
         selectedIcon: Icon(Icons.insights),
@@ -238,7 +240,7 @@ class _ShellState extends State<Shell> {
     NavigationDestination(
         icon: Icon(Icons.watch_outlined),
         selectedIcon: Icon(Icons.watch),
-        label: 'Device'),
+        label: 'Band'),
   ];
 
   @override
@@ -271,69 +273,6 @@ class _ShellState extends State<Shell> {
           ),
         ),
       );
-}
-
-/// Two pages under one bottom-bar destination.
-///
-/// The bottom bar carries three destinations; this is what lets five pages
-/// live behind them. The tab bar it draws IS the title — the pages it holds
-/// had their own headings removed, because a tab reading "History" directly
-/// above a heading reading "History" is the same word twice.
-///
-/// ⚠ The body is an [IndexedStack], NOT a TabBarView, and that is the whole
-/// reason this widget exists rather than a plain `DefaultTabController`.
-/// TabBarView builds its children lazily and disposes them as you swipe away;
-/// every page behind here documents itself as "built once at startup, before
-/// any band is connected", and HomePage, InsightsPage and HistoryPage all
-/// read SQLite from `initState` on exactly that assumption. Under a TabBarView
-/// the second tab would not load until first opened, and would reload every
-/// time — which is the behaviour the outer IndexedStack was chosen to avoid in
-/// the first place. Keeping both children mounted preserves it.
-///
-/// The TabController is here only for the bar's own selection and animation;
-/// the body follows its index by hand.
-class _TabGroup extends StatefulWidget {
-  final List<String> labels;
-  final List<Widget> pages;
-  const _TabGroup({required this.labels, required this.pages});
-
-  @override
-  State<_TabGroup> createState() => _TabGroupState();
-}
-
-class _TabGroupState extends State<_TabGroup> with SingleTickerProviderStateMixin {
-  late final TabController _c =
-      TabController(length: widget.pages.length, vsync: this)
-        ..addListener(() {
-          // Fires twice per change — once on the animation, once on settle —
-          // and again on a swipe that snaps back. Only rebuild when the page
-          // actually changed, or every drag frame rebuilds both children.
-          if (_c.index != _shown) setState(() => _shown = _c.index);
-        });
-  int _shown = 0;
-
-  @override
-  void dispose() {
-    _c.dispose();
-    super.dispose();
-  }
-
-  @override
-  Widget build(BuildContext context) {
-    final t = Theme.of(context);
-    return Column(children: [
-      TabBar(
-        controller: _c,
-        labelColor: t.colorScheme.primary,
-        unselectedLabelColor: kMuted,
-        indicatorColor: t.colorScheme.primary,
-        indicatorSize: TabBarIndicatorSize.tab,
-        dividerColor: Colors.transparent,
-        tabs: [for (final l in widget.labels) Tab(text: l)],
-      ),
-      Expanded(child: IndexedStack(index: _shown, children: widget.pages)),
-    ]);
-  }
 }
 
 /// A one-line connection state, pinned above every tab.

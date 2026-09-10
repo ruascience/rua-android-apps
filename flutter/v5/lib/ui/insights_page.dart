@@ -13,13 +13,14 @@ import 'kit.dart';
 /// The vendor computes these on the phone too — the band transmits none of
 /// them. Ours use published methods rather than the vendor's undisclosed ones,
 /// so the numbers will differ. Each card states what produced it.
-class InsightsPage extends StatefulWidget {
-  const InsightsPage({super.key});
+/// The long-run figures, as a SECTION under the same Trends tab.
+class InsightsSection extends StatefulWidget {
+  const InsightsSection({super.key});
   @override
-  State<InsightsPage> createState() => _InsightsPageState();
+  State<InsightsSection> createState() => _InsightsSectionState();
 }
 
-class _InsightsPageState extends State<InsightsPage> {
+class _InsightsSectionState extends State<InsightsSection> {
   final link = BandLink.instance;
   final profile = Profile.instance;
 
@@ -156,12 +157,13 @@ class _InsightsPageState extends State<InsightsPage> {
   Widget build(BuildContext context) {
     final t = Theme.of(context);
     if (loading) {
-      return const Center(child: CircularProgressIndicator());
+      return const Padding(
+        padding: EdgeInsets.symmetric(vertical: 40),
+        child: Center(child: CircularProgressIndicator()),
+      );
     }
-    return RefreshIndicator(
-      onRefresh: _load,
-      child: ListView(
-        padding: const EdgeInsets.fromLTRB(16, 8, 16, 28),
+    return Column(
+        crossAxisAlignment: CrossAxisAlignment.stretch,
         children: [
           // No "Insights" heading — the tab above says it. The line below
           // is not a subtitle to it; it is the point of the page, and the
@@ -218,9 +220,7 @@ class _InsightsPageState extends State<InsightsPage> {
               ),
             ),
           ]),
-        ],
-      ),
-    );
+        ]);
   }
 
   Widget _bioAgeCard(ThemeData t) {

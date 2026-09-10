@@ -104,8 +104,8 @@ class _SleepPageState extends State<SleepPage> {
       child: ListView(
         padding: const EdgeInsets.fromLTRB(16, 8, 16, 28),
         children: [
-          _header(t, n),
-          const SizedBox(height: 16),
+          _hero(t, n),
+          const SizedBox(height: 14),
           if (n == null)
             EmptyState(
               icon: Icons.bedtime_outlined,
@@ -115,23 +115,20 @@ class _SleepPageState extends State<SleepPage> {
                   'with a sync.',
             )
           else ...[
+            _hypnogramCard(t, n),
+            const SizedBox(height: 6),
+            Basis('${n.blocks.length} segments recorded · '
+                '${formatHm(n.inBed - n.totalSleep)} awake or unaccounted'),
+            const SizedBox(height: 18),
+            _stagesCard(t, n),
+            const SizedBox(height: 18),
+            const Lab('Overnight'),
+            const SizedBox(height: 10),
+            _overnightGrid(t, n),
+            const SizedBox(height: 18),
             _debtCard(t, n),
             const SizedBox(height: 12),
-            _durationTiles(t, n),
-            const SizedBox(height: 12),
-            _hypnogramCard(t, n),
-            const SizedBox(height: 12),
-            _stagesCard(t, n),
-            const SizedBox(height: 12),
             _overviewCard(t, n),
-            const SizedBox(height: 12),
-            _metricCard(t, 'Heart Rate', hr, n, 'bpm', kBad, rateSleepingHr,
-                lowIsBad: false),
-            const SizedBox(height: 12),
-            _metricCard(t, 'Blood Oxygen', spo2, n, '%', const Color(0xFF3DDC84),
-                rateSpo2),
-            const SizedBox(height: 12),
-            _metricCard(t, 'HRV', hrv, n, 'ms', const Color(0xFF37AEE2), rateHrv),
             const SizedBox(height: 12),
             _napsCard(t),
           ],
@@ -140,54 +137,74 @@ class _SleepPageState extends State<SleepPage> {
     );
   }
 
-  Widget _header(ThemeData t, SleepNight? n) => Row(children: [
-        Expanded(
-          child: Column(crossAxisAlignment: CrossAxisAlignment.start, children: [
-            // No "Sleep" heading — the tab above says it, and the score
-            // below is what the page is actually for.
-            if (n != null)
-              Row(crossAxisAlignment: CrossAxisAlignment.baseline,
-                  textBaseline: TextBaseline.alphabetic, children: [
-                Text('${n.score}',
-                    style: t.textTheme.headlineMedium?.copyWith(
-                        color: kAccent, fontWeight: FontWeight.w700)),
-                const SizedBox(width: 8),
-                Text(n.scoreLabel,
-                    style: t.textTheme.titleSmall?.copyWith(color: kMuted)),
-              ]),
-            if (n != null)
-              Row(
-                  children: List.generate(
-                      5,
-                      (i) => Icon(
-                          i < n.stars ? Icons.star : Icons.star_border,
-                          size: 15,
-                          color: i < n.stars ? kAccent2 : kMuted))),
-          ]),
-        ),
-        if (nights.length > 1) ...[
-          IconButton(
-            onPressed: index < nights.length - 1
-                ? () => setState(() => index++)
-                : null,
-            icon: const Icon(Icons.chevron_left),
-          ),
-          // The night being shown, and the only thing on this page that says
-          // WHICH night. It was bodySmall in muted grey — smaller than the
-          // chevrons either side of it — so the page read as "last night"
-          // whichever night you had paged back to.
-          Text(n == null ? '' : DateFormat.MMMd().format(n.start),
-              style: t.textTheme.titleLarge?.copyWith(
-                  color: kText, fontWeight: FontWeight.w600)),
-          IconButton(
-            onPressed: index > 0 ? () => setState(() => index--) : null,
-            icon: const Icon(Icons.chevron_right),
-          ),
-        ] else if (n != null)
-          Text(DateFormat.MMMd().format(n.start),
-              style: t.textTheme.titleLarge?.copyWith(
-                  color: kText, fontWeight: FontWeight.w600)),
+  /// The night stated before it is charted: how long, and what that scored.
+  ///
+  /// The duration is the headline because it is the measurement; the score is
+  /// a judgement derived from it and sits beside it at a third the size,
+  /// rather than the other way round.
+  Widget _hero(ThemeData t, SleepNight? n) {
+    if (n == null) {
+      return Row(children: [
+        const Lab('Last night'),
+        const Spacer(),
+        Lab('no record', color: kMuted),
       ]);
+    }
+    return Row(crossAxisAlignment: CrossAxisAlignment.end, children: [
+      Expanded(
+        child: Column(crossAxisAlignment: CrossAxisAlignment.start, children: [
+          Figure(formatHm(n.totalSleep), size: 44),
+          const SizedBox(height: 4),
+          Lab('Asleep · ${DateFormat.Hm().format(n.start)} to '
+              '${DateFormat.Hm().format(n.end)}'),
+        ]),
+      ),
+      Column(crossAxisAlignment: CrossAxisAlignment.end, children: [
+        Figure('${n.score}', size: 30, color: kAccent),
+        const SizedBox(height: 2),
+        Lab(n.scoreLabel),
+      ]),
+    ]);
+  }
+
+  /// What the band measured while the wearer was asleep.
+  Widget _overnightGrid(ThemeData t, SleepNight n) {
+    double? mean(List<Sample> xs) {
+      final within = xs
+          .where((s) => !s.at.isBefore(n.start) && !s.at.isAfter(n.end))
+          .map((s) => s.value)
+          .toList();
+      if (within.isEmpty) return null;
+      return within.reduce((a, b) => a + b) / within.length;
+    }
+
+    double? lowest(List<Sample> xs) {
+      final within = xs
+          .where((s) => !s.at.isBefore(n.start) && !s.at.isAfter(n.end))
+          .map((s) => s.value)
+          .toList();
+      if (within.isEmpty) return null;
+      return within.reduce((a, b) => a < b ? a : b);
+    }
+
+    Widget cell(String label, double? v, String unit) => Column(
+        crossAxisAlignment: CrossAxisAlignment.start,
+        children: [
+          if (v == null)
+            Figure('—', size: 24, color: kMuted)
+          else
+            Figure(v.round().toString(), unit: unit, size: 24),
+          const SizedBox(height: 2),
+          Lab(label),
+        ]);
+
+    return RuleGrid(children: [
+      cell('Lowest HR', lowest(hr), 'bpm'),
+      cell('Mean HRV', mean(hrv), 'ms'),
+      cell('Mean SpO₂', mean(spo2), '%'),
+    ]);
+  }
+
 
   Widget _debtCard(ThemeData t, SleepNight n) {
     final d = n.debt();
@@ -223,30 +240,7 @@ class _SleepPageState extends State<SleepPage> {
     );
   }
 
-  Widget _durationTiles(ThemeData t, SleepNight n) => Row(children: [
-        Expanded(
-          child: SectionCard(
-            title: 'Total Sleep Time',
-            child: BigStat(formatHm(n.totalSleep), '', _ratingOf(n.totalSleep),
-                color: kAccent),
-          ),
-        ),
-        const SizedBox(width: 12),
-        Expanded(
-          child: SectionCard(
-            title: 'In Bed',
-            child: BigStat(formatHm(n.inBed), '',
-                '${DateFormat.Hm().format(n.start)} – ${DateFormat.Hm().format(n.end)}',
-                color: kAccent2),
-          ),
-        ),
-      ]);
 
-  String _ratingOf(Duration d) {
-    final h = d.inMinutes / 60;
-    if (h >= 7 && h <= 9) return 'Good';
-    return h < 7 ? 'Short' : 'Long';
-  }
 
   Widget _hypnogramCard(ThemeData t, SleepNight n) => SectionCard(
         title: 'Sleep Duration',
@@ -408,85 +402,7 @@ class _SleepPageState extends State<SleepPage> {
         ]),
       );
 
-  Widget _metricCard(
-    ThemeData t,
-    String title,
-    List<Sample> data,
-    SleepNight n,
-    String unit,
-    Color colour,
-    Rating Function(double) rate, {
-    bool lowIsBad = true,
-  }) {
-    final s = summarise(data, n.start, n.end, rate, lowIsBad: lowIsBad);
-    final inWindow = data
-        .where((x) => !x.at.isBefore(n.start) && !x.at.isAfter(n.end))
-        .map((x) => x.value)
-        .toList();
-    if (s == null) {
-      return SectionCard(
-        title: title,
-        subtitle: 'overnight',
-        child: Text('No $title readings during this night.',
-            style: t.textTheme.bodySmall?.copyWith(color: kMuted)),
-      );
-    }
-    return SectionCard(
-      title: title,
-      subtitle: 'overnight',
-      child: Column(children: [
-        Sparkline(inWindow, color: colour, height: 64),
-        const SizedBox(height: 14),
-        Row(children: [
-          Expanded(
-              child: _ratingTile(t, s.avg!, unit, 'Avg', s.avgRating, colour)),
-          const SizedBox(width: 12),
-          Expanded(
-              child: _ratingTile(
-                  t, s.lowest!, unit, 'Lowest', s.lowestRating, colour)),
-        ]),
-      ]),
-    );
-  }
 
-  Widget _ratingTile(ThemeData t, double v, String unit, String label,
-      Rating r, Color colour) {
-    final c = switch (r) {
-      Rating.optimal => const Color(0xFF2FA84F),
-      Rating.good => kWarn,
-      Rating.needsAttention => kBad,
-      Rating.unknown => kMuted,
-    };
-    return Container(
-      padding: const EdgeInsets.symmetric(vertical: 14),
-      decoration: BoxDecoration(
-          color: const Color(0xFF0B0E12),
-          borderRadius: BorderRadius.circular(14)),
-      child: Column(children: [
-        Row(
-            mainAxisAlignment: MainAxisAlignment.center,
-            crossAxisAlignment: CrossAxisAlignment.baseline,
-            textBaseline: TextBaseline.alphabetic,
-            children: [
-              Text(v.round().toString(),
-                  style: t.textTheme.headlineSmall
-                      ?.copyWith(fontWeight: FontWeight.w600)),
-              Text(' $unit',
-                  style: t.textTheme.bodySmall?.copyWith(color: kMuted)),
-            ]),
-        Text(label, style: t.textTheme.labelSmall?.copyWith(color: kMuted)),
-        const SizedBox(height: 6),
-        Container(
-          padding: const EdgeInsets.symmetric(horizontal: 10, vertical: 3),
-          decoration: BoxDecoration(
-              color: c.withValues(alpha: 0.18),
-              borderRadius: BorderRadius.circular(20)),
-          child: Text(r.label,
-              style: t.textTheme.labelSmall?.copyWith(color: c)),
-        ),
-      ]),
-    );
-  }
 
   Widget _napsCard(ThemeData t) => SectionCard(
         title: 'Naps',

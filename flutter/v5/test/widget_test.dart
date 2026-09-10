@@ -3,7 +3,7 @@ import 'package:aurav5/ble/band_link.dart';
 import 'package:flutter_blue_plus/flutter_blue_plus.dart';
 import 'package:aurav5/data/profile.dart';
 import 'package:aurav5/ui/device_page.dart';
-import 'package:aurav5/ui/history_page.dart';
+import 'package:aurav5/ui/trends_page.dart';
 import 'package:aurav5/ui/lab_page.dart';
 import 'package:aurav5/ui/sleep_page.dart';
 import 'package:aurav5/ui/kit.dart';
@@ -45,25 +45,15 @@ void main() {
 
   setUp(() => SharedPreferences.setMockInitialValues({}));
 
-  testWidgets('app boots to three destinations holding five pages',
-      (tester) async {
+  testWidgets('app boots to four flat destinations', (tester) async {
     await tester.pumpWidget(const AuraV5App());
     await tester.pump();
 
-    // Three at the bottom.
-    for (final tab in ['Home', 'Trends', 'Device']) {
+    // One row of tabs, one page each. Two rows was two things to learn, and
+    // it paired Insights with History — one question asked twice.
+    for (final tab in ['Today', 'Sleep', 'Trends', 'Band']) {
       expect(find.text(tab), findsWidgets, reason: '$tab destination missing');
     }
-    // Sleep is onstage: it is the other tab of the SELECTED destination.
-    expect(find.text('Sleep'), findsWidgets,
-        reason: 'paired with Today behind Home, not gone');
-    // Insights and History are mounted but OFFSTAGE — they belong to the
-    // destination that is not selected. `skipOffstage: false` is the whole
-    // point of the assertion: they exist, which is what keeps their initState
-    // work done once at startup rather than on first open.
-    expect(find.text('Insights', skipOffstage: false), findsWidgets,
-        reason: 'paired with History behind Trends, not gone');
-    expect(find.text('History', skipOffstage: false), findsWidgets);
     expect(find.text('Lab'), findsNothing,
         reason: 'Lab was asked to leave the bottom bar');
 
@@ -84,9 +74,9 @@ void main() {
     await tester.pumpWidget(const AuraV5App());
     await tester.pump();
 
-    expect(find.byType(HistoryPage, skipOffstage: false), findsOneWidget,
-        reason: 'History is the SECOND tab of a destination that is not even '
-            'selected — it must still be mounted');
+    expect(find.byType(TrendsPage, skipOffstage: false), findsOneWidget,
+        reason: 'Trends belongs to a destination that is not selected — it '
+            'must still be mounted, or its initState work moves to first open');
     expect(find.byType(SleepPage, skipOffstage: false), findsOneWidget);
     expect(find.byType(DevicePage, skipOffstage: false), findsOneWidget);
   });
@@ -96,7 +86,7 @@ void main() {
     await tester.pumpWidget(const AuraV5App());
     await tester.pump();
 
-    await tester.tap(find.text('Device'));
+    await tester.tap(find.text('Band'));
     await tester.pumpAndSettle();
 
     expect(find.text('My Device'), findsOneWidget);
@@ -111,13 +101,10 @@ void main() {
     await tester.pumpWidget(const AuraV5App());
     await tester.pump();
 
-    // Insights sits behind the Trends destination now, so it takes two taps.
+    // Insights is a section of the Trends page now, not a tab of its own.
     await tester.tap(find.text('Trends'));
     await tester.pumpAndSettle();
-    await tester.tap(find.text('Insights').last);
-    await tester.pumpAndSettle();
 
-    expect(find.text('Insights'), findsWidgets);
     expect(find.text('Derived on this phone from your band\'s data'),
         findsOneWidget,
         reason: 'the one line that still says these are computed here rather '
@@ -259,7 +246,7 @@ void main() {
 
     await tester.pumpWidget(const AuraV5App());
     await tester.pump();
-    await tester.tap(find.text('Device'));
+    await tester.tap(find.text('Band'));
     await tester.pumpAndSettle();
 
     expect(link.found, isEmpty);

@@ -313,28 +313,42 @@ class _HomePageState extends State<HomePage> {
                 _unverifiedBanner(t),
                 const SizedBox(height: 12),
               ],
-              _activityCard(t),
-              const SizedBox(height: 12),
-              _readinessRow(t),
-              const SizedBox(height: 12),
-              // No footnote. The provenance note that sat under this graph
-              // was removed at the user's request; the UNVERIFIED warning it
-              // also carried is not lost, because _unverifiedBanner above
-              // already states it at the top of the page whenever
-              // `fd.nothingConfirmedOnV5` holds.
-              _metricCard(t, 'Heart Rate', hr, 'bpm', kBad,
-                  extra: resting == null
-                      ? null
-                      : '${resting!.display} bpm resting'),
-              const SizedBox(height: 12),
-              _metricCard(t, 'Blood Oxygen', spo2, '%', kAccent),
-              const SizedBox(height: 12),
-              if (temp.isNotEmpty)
-                _metricCard(t, 'Skin Temperature', temp,
-                    Units.of(Profile.instance).temperatureUnit, kWarn,
-                    convert: Units.of(Profile.instance).temperatureValue)
-              else
-                _temperatureUnavailable(t),
+
+              // The day itself, as one continuous trace. This is the anchor
+              // of the screen: a day is a continuous thing and the band
+              // records it continuously, so it is drawn that way rather than
+              // reduced to a latest-value tile with a sparkline beside it.
+              Row(mainAxisAlignment: MainAxisAlignment.spaceBetween, children: [
+                const Lab('Heart rate · this day'),
+                if (hr.isNotEmpty)
+                  Lab('${hr.last.value.round()} bpm at '
+                      '${DateFormat.Hm().format(hr.last.at)}', color: kBad),
+              ]),
+              const SizedBox(height: 6),
+              DayRibbon(samples: hr, day: _day, colour: kBad),
+              const SizedBox(height: 6),
+              Basis(_ribbonCaption()),
+              const SizedBox(height: 18),
+
+              // The three derived figures, each printing the sentence the
+              // analytics already computed about where it came from.
+              RuleGrid(children: [
+                _derived('Recovery', recoveryScore,
+                    empty: 'needs 4+ nights of HRV'),
+                _derived('Strain', strainScore,
+                    empty: 'needs more of today\'s HR', suffix: ' / 21'),
+                _derived('Resting', resting, empty: 'wear it overnight'),
+              ]),
+              const SizedBox(height: 18),
+
+              const Lab('Activity'),
+              const SizedBox(height: 10),
+              _activityBars(),
+              const SizedBox(height: 20),
+
+              const Lab('Also measured'),
+              const SizedBox(height: 10),
+              _alsoMeasured(),
             ],
           ],
         ),
@@ -363,6 +377,118 @@ class _HomePageState extends State<HomePage> {
         ),
       );
 
+  /// What the trace shows beyond its own shape: when the peak was, and that
+  /// the shaded band is sleep rather than an axis decoration.
+  String _ribbonCaption() {
+    if (hr.isEmpty) return 'No heart rate recorded for this day.';
+    var peak = hr.first;
+    for (final s in hr) {
+      if (s.value > peak.value) peak = s;
+    }
+    return 'Shaded — asleep. Peak ${peak.value.round()} bpm at '
+        '${DateFormat.Hm().format(peak.at)}.';
+  }
+
+  /// A derived figure and the sentence it carries.
+  ///
+  /// The basis line is not decoration: these numbers are computed on this
+  /// phone from a window of samples that is often short, and the app already
+  /// knew how to say so ("lowest sustained 25 s during 00:00–06:00"). Printing
+  /// it under the figure is the difference between a reading and a claim.
+  Widget _derived(String label, Estimate? e, {required String empty, String suffix = ''}) =>
+      Column(crossAxisAlignment: CrossAxisAlignment.start, children: [
+        Lab(label),
+        const SizedBox(height: 3),
+        if (e == null) ...[
+          Figure('—', size: 30, color: kMuted),
+          const SizedBox(height: 3),
+          Basis(empty),
+        ] else ...[
+          Figure(e.display, unit: suffix.isEmpty ? e.unit : suffix, size: 30),
+          const SizedBox(height: 3),
+          Expanded(child: Basis(e.basis)),
+        ],
+      ]);
+
+  Widget _activityBars() {
+    final g = Profile.instance.goals;
+    final u = Units.of(Profile.instance);
+    return Column(children: [
+      GoalBar(
+        label: 'Steps',
+        value: NumberFormat.decimalPattern().format(steps.round()),
+        goal: '/ ${NumberFormat.decimalPattern().format(g.steps)}',
+        fraction: g.steps == 0 ? 0 : steps / g.steps,
+        colour: kAccent,
+      ),
+      const SizedBox(height: 11),
+      GoalBar(
+        label: 'Calories',
+        value: kcal.toStringAsFixed(0),
+        goal: '/ ${g.kcal}',
+        fraction: g.kcal == 0 ? 0 : kcal / g.kcal,
+        colour: kGreen,
+      ),
+      const SizedBox(height: 11),
+      GoalBar(
+        label: 'Distance',
+        value: u.distanceValue(km),
+        goal: '/ ${u.distance(g.km)}',
+        fraction: g.km == 0 ? 0 : km / g.km,
+        colour: kWarn,
+      ),
+      if (activeMin > 0) ...[
+        const SizedBox(height: 11),
+        GoalBar(
+          label: 'Active',
+          value: '${activeMin.round()}',
+          goal: '/ ${g.activeMinutes} min',
+          fraction: g.activeMinutes == 0 ? 0 : activeMin / g.activeMinutes,
+          colour: kAccent2,
+        ),
+      ],
+    ]);
+  }
+
+  /// The signals that are sampled occasionally rather than continuously.
+  ///
+  /// Last reading and its time, not a chart: at a handful of readings a day a
+  /// sparkline draws a line between three points and implies a trend that is
+  /// not there. The trend for these lives in Trends, over weeks.
+  Widget _alsoMeasured() {
+    final u = Units.of(Profile.instance);
+    Widget tile(String label, List<Sample> data, String unit, Color c,
+        {String Function(double)? fmt}) {
+      final last = data.isEmpty ? null : data.last;
+      return Container(
+        decoration:
+            BoxDecoration(border: Border(left: BorderSide(color: c, width: 2))),
+        padding: const EdgeInsets.only(left: 9),
+        child: Column(crossAxisAlignment: CrossAxisAlignment.start, children: [
+          if (last == null)
+            Figure('—', size: 22, color: kMuted)
+          else
+            Figure(fmt == null ? last.value.round().toString() : fmt(last.value),
+                unit: unit, size: 22),
+          const SizedBox(height: 1),
+          Lab(last == null
+              ? '$label none yet'
+              : '$label ${DateFormat.Hm().format(last.at)}'),
+        ]),
+      );
+    }
+
+    return Row(crossAxisAlignment: CrossAxisAlignment.start, children: [
+      Expanded(child: tile('SpO₂', spo2, '%', kAccent)),
+      const SizedBox(width: 10),
+      Expanded(child: tile('HRV', hrv, 'ms', kGreen)),
+      const SizedBox(width: 10),
+      Expanded(
+          child: tile('Skin', temp, u.temperatureUnit, kWarn,
+              fmt: (v) => u.temperatureValue(v).toStringAsFixed(1))),
+    ]);
+  }
+
   Widget _connectionChip(ThemeData t) {
     final on = link.connected;
     return Container(
@@ -382,98 +508,7 @@ class _HomePageState extends State<HomePage> {
     );
   }
 
-  Widget _activityCard(ThemeData t) => SectionCard(
-        title: 'Activity',
-        subtitle: 'today',
-        // Steps/distance/calories come from opcode 0x51 (per-day totals). If
-        // they are all zero we have simply not synced yet — say that rather
-        // than drawing empty rings, which read as "you walked nowhere".
-        child: (steps == 0 && kcal == 0 && km == 0)
-            ? Row(children: [
-                Icon(Icons.directions_walk, color: kMuted, size: 30),
-                const SizedBox(width: 14),
-                Expanded(
-                  child: Text(
-                    'No activity synced for today yet. Press Sync history on '
-                    'the Device tab — the band keeps a running daily total.',
-                    style: t.textTheme.bodySmall?.copyWith(color: kMuted),
-                  ),
-                ),
-              ])
-            : Builder(builder: (context) {
-                final g = Profile.instance.goals;
-                final u = Units.of(Profile.instance);
-                return Row(children: [
-          ActivityRings(
-              steps: steps,
-              stepGoal: g.steps.toDouble(),
-              kcal: kcal,
-              kcalGoal: g.kcal.toDouble(),
-              km: km,
-              kmGoal: g.km),
-          const SizedBox(width: 22),
-          Expanded(
-            child: Column(children: [
-              _goalRow(t, 'Steps', steps.round().toString(),
-                  NumberFormat.decimalPattern().format(g.steps), kAccent),
-              const SizedBox(height: 10),
-              _goalRow(t, 'Calories', kcal.toStringAsFixed(0), '${g.kcal}',
-                  kGreen),
-              const SizedBox(height: 10),
-              _goalRow(t, 'Distance', u.distanceValue(km),
-                  u.distance(g.km), kWarn),
-              if (activeMin > 0) ...[
-                const SizedBox(height: 10),
-                _goalRow(t, 'Active', '${activeMin.round()}',
-                    '${g.activeMinutes} min', kAccent2),
-              ],
-            ]),
-          ),
-        ]);
-              }),
-      );
 
-  Widget _goalRow(
-          ThemeData t, String label, String value, String goal, Color c) =>
-      Row(children: [
-        Container(
-            width: 8,
-            height: 8,
-            decoration: BoxDecoration(color: c, shape: BoxShape.circle)),
-        const SizedBox(width: 8),
-        Expanded(
-            child: Text(label,
-                style: t.textTheme.bodySmall?.copyWith(color: kMuted))),
-        Text(value, style: t.textTheme.bodyMedium),
-        Text(' / $goal',
-            style: t.textTheme.labelSmall?.copyWith(color: kMuted)),
-      ]);
-
-  Widget _readinessRow(ThemeData t) => Row(children: [
-        Expanded(
-          child: SectionCard(
-            title: 'Recovery',
-            child: EstimateTile(
-              label: recoveryScore == null ? '' : recoveryScore!.basis,
-              estimate: recoveryScore,
-              emptyHint: 'needs 4+ nights of HRV',
-              color: kAccent,
-            ),
-          ),
-        ),
-        const SizedBox(width: 12),
-        Expanded(
-          child: SectionCard(
-            title: 'Strain',
-            child: EstimateTile(
-              label: strainScore == null ? '' : 'of 21',
-              estimate: strainScore,
-              emptyHint: 'needs more of today\'s HR',
-              color: kAccent2,
-            ),
-          ),
-        ),
-      ]);
 
   /// Says these numbers are from storage, not from the band right now.
   ///
@@ -549,89 +584,4 @@ class _HomePageState extends State<HomePage> {
         ),
       );
 
-  Widget _metricCard(
-    ThemeData t,
-    String title,
-    List<Sample> data,
-    String unit,
-    Color colour, {
-    String? extra,
-    String? footnote,
-    /// Applied to displayed values only. Storage stays metric; see [Units].
-    double Function(double)? convert,
-  }) {
-    final f = convert ?? (double v) => v;
-    final source =
-        convert == null ? data : [for (final s in data) Sample(s.at, f(s.value))];
-    final recent =
-        source.length > 120 ? source.sublist(source.length - 120) : source;
-    final last = source.isEmpty ? null : source.last;
-    final vals = source.map((s) => s.value).toList();
-    final avg = vals.isEmpty
-        ? null
-        : vals.reduce((a, b) => a + b) / vals.length;
-    return SectionCard(
-      title: title,
-      subtitle: last == null
-          ? null
-          : 'last reading ${DateFormat.Hm().format(last.at)}',
-      child: Column(children: [
-        Sparkline(recent.map((s) => s.value).toList(), color: colour),
-        const SizedBox(height: 12),
-        Row(mainAxisAlignment: MainAxisAlignment.spaceBetween, children: [
-          BigStat(
-              last == null
-                  ? '—'
-                  : (unit == '°C'
-                      ? last.value.toStringAsFixed(1)
-                      : last.value.round().toString()),
-              unit,
-              'latest',
-              color: colour),
-          BigStat(
-              avg == null
-                  ? '—'
-                  : (unit == '°C'
-                      ? avg.toStringAsFixed(1)
-                      : avg.round().toString()),
-              unit,
-              'average'),
-          if (extra != null)
-            Flexible(
-              child: Text(extra,
-                  textAlign: TextAlign.right,
-                  style: t.textTheme.labelSmall?.copyWith(color: kMuted)),
-            ),
-        ]),
-        if (footnote != null) ...[
-            const SizedBox(height: 8),
-            Text(footnote,
-                style: t.textTheme.bodySmall?.copyWith(
-                    color: kMuted, fontSize: 11, height: 1.35)),
-          ],
-        ]),
-    );
-  }
-
-  /// Temperature is the one metric the band withholds until background
-  /// monitoring is switched on, and an empty chart would read as a broken
-  /// sensor. Say what is actually happening instead.
-  Widget _temperatureUnavailable(ThemeData t) => SectionCard(
-        title: 'Skin Temperature',
-        subtitle: 'nothing recorded yet',
-        tint: kCardAlt,
-        child: Row(children: [
-          Icon(Icons.thermostat, color: kMuted, size: 30),
-          const SizedBox(width: 14),
-          Expanded(
-            child: Text(
-              'The band returned "nothing stored" for temperature. That is a '
-              'background-monitoring setting, not a missing sensor — enabling '
-              'it writes to the band, so it is on the Device tab behind a '
-              'confirmation.',
-              style: t.textTheme.bodySmall?.copyWith(color: kMuted),
-            ),
-          ),
-        ]),
-      );
 }

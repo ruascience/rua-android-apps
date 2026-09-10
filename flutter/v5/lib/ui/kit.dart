@@ -28,6 +28,7 @@ library;
 import 'package:flutter/material.dart';
 
 import '../data/profile.dart';
+import '../data/store.dart';
 import 'profile_edit.dart' show formatWeightKg;
 
 import '../analytics/metrics.dart';
@@ -45,6 +46,17 @@ import '../analytics/metrics.dart';
 /// makes them able to change.
 class Palette {
   final Color bg, card, cardAlt, accent, accent2, warn, bad, green, text, muted;
+
+  /// Hairlines. The redesign draws structure with 1px rules and a shared
+  /// ground rather than with elevated rounded cards, so this is a token in its
+  /// own right instead of an opacity applied to the text colour.
+  final Color rule;
+
+  /// Sleep stages. Fixed to the stage, not to the accent ramp: deep, light and
+  /// awake have to stay distinguishable from each other in a hypnogram, and
+  /// borrowing UI accents made the chart change meaning when the accent did.
+  final Color deep, lightSleep, awake;
+
   const Palette({
     required this.bg,
     required this.card,
@@ -56,6 +68,10 @@ class Palette {
     required this.green,
     required this.text,
     required this.muted,
+    required this.rule,
+    required this.deep,
+    required this.lightSleep,
+    required this.awake,
   });
 }
 
@@ -72,22 +88,30 @@ const _darkPalette = Palette(
   green: Color(0xFF7FB49A),
   text: Color(0xFFF2EFEA),
   muted: Color(0xFF9A9289),
+  rule: Color(0xFF2C2721),
+  deep: Color(0xFF4E6FA8),
+  lightSleep: Color(0xFF8FA6CE),
+  awake: Color(0xFFD98A3A),
 );
 
 /// The brand's paper the right way up. The hues are the same family, taken
 /// DOWN in lightness rather than reused: the dark set is lifted for a dark
 /// ground, and those same values on white fail contrast for small text.
 const _lightPalette = Palette(
-  bg: Color(0xFFF7F4EF),
+  bg: Color(0xFFF7F4EE),
   card: Color(0xFFFFFFFF),
-  cardAlt: Color(0xFFEFEAE2),
-  accent: Color(0xFF3F63A0),
+  cardAlt: Color(0xFFEFE9DE),
+  accent: Color(0xFF3E5F98),
   accent2: Color(0xFF6250A8),
-  warn: Color(0xFF9C6620),
-  bad: Color(0xFFB23A31),
-  green: Color(0xFF3F6B56),
-  text: Color(0xFF1B1815),
-  muted: Color(0xFF6E655C),
+  warn: Color(0xFFA55D1C),
+  bad: Color(0xFFB0432F),
+  green: Color(0xFF5C7A63),
+  text: Color(0xFF17150F),
+  muted: Color(0xFF6B6155),
+  rule: Color(0xFFE5DED2),
+  deep: Color(0xFF2F4A73),
+  lightSleep: Color(0xFF7B93BF),
+  awake: Color(0xFFC98A4B),
 );
 
 Palette _active = _darkPalette;
@@ -109,6 +133,10 @@ Color get kBad => _active.bad;
 Color get kGreen => _active.green;
 Color get kText => _active.text;
 Color get kMuted => _active.muted;
+Color get kRule => _active.rule;
+Color get kDeep => _active.deep;
+Color get kLightSleep => _active.lightSleep;
+Color get kAwake => _active.awake;
 
 /// Newsreader — the brand serif. Figures and titles only.
 const kSerif = 'Newsreader';
@@ -656,4 +684,309 @@ class Units {
 
   double temperatureValue(double celsius) =>
       imperial ? celsius * 9 / 5 + 32 : celsius;
+}
+
+// ------------------------------------------------- the redesign's vocabulary
+
+/// A monospaced, letter-spaced caption. The label style of the whole app.
+class Lab extends StatelessWidget {
+  final String text;
+  final Color? color;
+  const Lab(this.text, {super.key, this.color});
+
+  @override
+  Widget build(BuildContext context) => Text(
+        text.toUpperCase(),
+        style: TextStyle(
+          fontFamily: kMono,
+          fontSize: 9.5,
+          letterSpacing: 1.05,
+          height: 1.35,
+          color: color ?? kMuted,
+        ),
+      );
+}
+
+/// The sentence a derived figure carries about where it came from.
+///
+/// The app already computed these — "lowest sustained 25 s during
+/// 00:00–06:00", "overnight HRV vs your own 12-night baseline" — and buried
+/// them in a tooltip or dropped them. Printing them under the figure is the
+/// design: a number on a health screen is worth what its provenance is worth.
+class Basis extends StatelessWidget {
+  final String text;
+  const Basis(this.text, {super.key});
+
+  @override
+  Widget build(BuildContext context) => Text(
+        text,
+        style: TextStyle(
+          fontFamily: kMono,
+          fontSize: 9,
+          height: 1.45,
+          color: kMuted.withValues(alpha: 0.85),
+        ),
+      );
+}
+
+/// A figure, in the brand serif, with its unit tucked in at label size.
+class Figure extends StatelessWidget {
+  final String value;
+  final String unit;
+  final double size;
+  final Color? color;
+  const Figure(this.value, {super.key, this.unit = '', this.size = 34, this.color});
+
+  @override
+  Widget build(BuildContext context) => RichText(
+        text: TextSpan(
+          text: value,
+          style: TextStyle(
+            fontFamily: kSerif,
+            fontWeight: FontWeight.w500,
+            fontSize: size,
+            height: 1.05,
+            letterSpacing: -0.5,
+            color: color ?? kText,
+          ),
+          children: unit.isEmpty
+              ? null
+              : [
+                  TextSpan(
+                    text: unit,
+                    style: TextStyle(
+                      fontFamily: kSans,
+                      fontWeight: FontWeight.w400,
+                      fontSize: size * 0.34,
+                      color: kMuted,
+                    ),
+                  ),
+                ],
+        ),
+      );
+}
+
+/// A day of one signal, drawn against a fixed 24-hour axis.
+///
+/// The anchor of the redesign. A day is a continuous thing and the band
+/// records it continuously; drawing it as one trace — with the hours asleep
+/// shaded and the latest reading marked — says more about the day than any
+/// arrangement of tiles can, and it makes two days comparable at a glance
+/// because the axis never moves.
+class DayRibbon extends StatelessWidget {
+  final List<Sample> samples;
+  final DateTime day;
+  final Color colour;
+
+  /// Hours shaded as "asleep". Empty draws no band.
+  final int sleepFromHour, sleepToHour;
+
+  const DayRibbon({
+    super.key,
+    required this.samples,
+    required this.day,
+    required this.colour,
+    this.sleepFromHour = 0,
+    this.sleepToHour = 7,
+  });
+
+  @override
+  Widget build(BuildContext context) {
+    final start = DateTime(day.year, day.month, day.day);
+    return Semantics(
+      label: _spoken(start),
+      excludeSemantics: true,
+      child: Container(
+        decoration: BoxDecoration(color: kCard, border: Border.all(color: kRule)),
+        padding: const EdgeInsets.fromLTRB(8, 10, 8, 6),
+        child: Column(children: [
+          SizedBox(
+            height: 120,
+            width: double.infinity,
+            child: CustomPaint(
+              painter: _RibbonPainter(
+                samples: samples,
+                start: start,
+                colour: colour,
+                rule: kRule.withValues(alpha: 0.65),
+                night: kCardAlt,
+                sleepFromHour: sleepFromHour,
+                sleepToHour: sleepToHour,
+              ),
+            ),
+          ),
+          const SizedBox(height: 4),
+          Row(
+            mainAxisAlignment: MainAxisAlignment.spaceBetween,
+            children: const [Lab('00'), Lab('06'), Lab('12'), Lab('18'), Lab('24')],
+          ),
+        ]),
+      ),
+    );
+  }
+
+  String _spoken(DateTime start) {
+    if (samples.isEmpty) return 'No readings for this day.';
+    final vals = samples.map((s) => s.value).toList();
+    final lo = vals.reduce((a, b) => a < b ? a : b);
+    final hi = vals.reduce((a, b) => a > b ? a : b);
+    return 'Day trace. ${samples.length} readings from '
+        '${lo.round()} to ${hi.round()}, latest ${vals.last.round()}.';
+  }
+}
+
+class _RibbonPainter extends CustomPainter {
+  final List<Sample> samples;
+  final DateTime start;
+  final Color colour, rule, night;
+  final int sleepFromHour, sleepToHour;
+
+  _RibbonPainter({
+    required this.samples,
+    required this.start,
+    required this.colour,
+    required this.rule,
+    required this.night,
+    required this.sleepFromHour,
+    required this.sleepToHour,
+  });
+
+  @override
+  void paint(Canvas canvas, Size size) {
+    // The night band first, so the trace sits on top of it.
+    if (sleepToHour > sleepFromHour) {
+      final x0 = size.width * (sleepFromHour / 24);
+      final x1 = size.width * (sleepToHour / 24);
+      canvas.drawRect(Rect.fromLTRB(x0, 0, x1, size.height), Paint()..color = night);
+    }
+
+    final grid = Paint()
+      ..color = rule
+      ..strokeWidth = 1;
+    for (var i = 1; i < 4; i++) {
+      final y = size.height * i / 4;
+      canvas.drawLine(Offset(0, y), Offset(size.width, y), grid);
+    }
+
+    if (samples.length < 2) return;
+
+    final vals = samples.map((s) => s.value).toList();
+    var lo = vals.reduce((a, b) => a < b ? a : b);
+    var hi = vals.reduce((a, b) => a > b ? a : b);
+    // A flat day would divide by zero and, worse, draw a line through the
+    // middle as though it were the mean of a range it never had.
+    if (hi - lo < 1) {
+      lo -= 1;
+      hi += 1;
+    }
+    final pad = (hi - lo) * 0.12;
+    lo -= pad;
+    hi += pad;
+
+    double xFor(DateTime t) =>
+        size.width * (t.difference(start).inSeconds / 86400.0).clamp(0.0, 1.0);
+    double yFor(double v) =>
+        size.height - ((v - lo) / (hi - lo)) * size.height;
+
+    final path = Path()..moveTo(xFor(samples.first.at), yFor(samples.first.value));
+    for (final s in samples.skip(1)) {
+      path.lineTo(xFor(s.at), yFor(s.value));
+    }
+    canvas.drawPath(
+        path,
+        Paint()
+          ..style = PaintingStyle.stroke
+          ..strokeWidth = 1.6
+          ..strokeJoin = StrokeJoin.round
+          ..strokeCap = StrokeCap.round
+          ..color = colour);
+
+    // The latest reading, marked where it happened rather than at the edge.
+    final last = samples.last;
+    final lx = xFor(last.at), ly = yFor(last.value);
+    canvas.drawCircle(Offset(lx, ly), 3, Paint()..color = colour);
+  }
+
+  @override
+  bool shouldRepaint(_RibbonPainter old) =>
+      old.samples != samples || old.colour != colour;
+}
+
+/// One measure against the goal set for it.
+class GoalBar extends StatelessWidget {
+  final String label, value, goal;
+  final double fraction;
+  final Color colour;
+  const GoalBar({
+    super.key,
+    required this.label,
+    required this.value,
+    required this.goal,
+    required this.fraction,
+    required this.colour,
+  });
+
+  @override
+  Widget build(BuildContext context) => Semantics(
+        label: '$label, $value of $goal',
+        excludeSemantics: true,
+        child: Column(crossAxisAlignment: CrossAxisAlignment.start, children: [
+          Row(mainAxisAlignment: MainAxisAlignment.spaceBetween, children: [
+            Text(label, style: TextStyle(fontSize: 13, color: kText)),
+            RichText(
+              text: TextSpan(
+                text: value,
+                style: TextStyle(fontFamily: kMono, fontSize: 12, color: kText),
+                children: [
+                  TextSpan(
+                      text: '  $goal',
+                      style: TextStyle(fontFamily: kMono, fontSize: 12, color: kMuted)),
+                ],
+              ),
+            ),
+          ]),
+          const SizedBox(height: 4),
+          // A 3px rule, not a rounded pill: the same hairline vocabulary as
+          // everything else on the screen.
+          SizedBox(
+            height: 3,
+            child: LayoutBuilder(
+              builder: (context, c) => Stack(children: [
+                Container(width: c.maxWidth, height: 3, color: kRule),
+                Container(
+                    width: c.maxWidth * fraction.clamp(0.0, 1.0),
+                    height: 3,
+                    color: colour),
+              ]),
+            ),
+          ),
+        ]),
+      );
+}
+
+/// Cells divided by hairlines, sharing the page's ground.
+class RuleGrid extends StatelessWidget {
+  final List<Widget> children;
+  final int columns;
+  const RuleGrid({super.key, required this.children, this.columns = 3});
+
+  @override
+  Widget build(BuildContext context) => Container(
+        decoration: BoxDecoration(
+          color: kRule,
+          border: Border.symmetric(horizontal: BorderSide(color: kRule)),
+        ),
+        child: GridView.count(
+          crossAxisCount: columns,
+          shrinkWrap: true,
+          physics: const NeverScrollableScrollPhysics(),
+          mainAxisSpacing: 1,
+          crossAxisSpacing: 1,
+          childAspectRatio: 1.15,
+          children: [
+            for (final c in children)
+              Container(color: kBg, padding: const EdgeInsets.all(12), child: c),
+          ],
+        ),
+      );
 }

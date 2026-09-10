@@ -44,7 +44,7 @@ void main() {
   testWidgets('the Device tab offers a route to it', (tester) async {
     await tester.pumpWidget(const AuraV5App());
     await tester.pump();
-    await tester.tap(find.text('Device'));
+    await tester.tap(find.text('Band'));
     await tester.pumpAndSettle();
 
     expect(find.text('Your details'), findsOneWidget,
