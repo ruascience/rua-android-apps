@@ -141,12 +141,35 @@ class AuraV5App extends StatelessWidget {
   final bool storageFailed;
   const AuraV5App({super.key, this.storageFailed = false});
 
+  static ThemeMode _mode(AppTheme t) => switch (t) {
+        AppTheme.system => ThemeMode.system,
+        AppTheme.light => ThemeMode.light,
+        AppTheme.dark => ThemeMode.dark,
+      };
+
   @override
-  Widget build(BuildContext context) => MaterialApp(
-        title: 'Rua Science',
-        debugShowCheckedModeBanner: false,
-        theme: buildTheme(),
-        home: Shell(storageFailed: storageFailed),
+  Widget build(BuildContext context) => StreamBuilder<void>(
+        // Rebuilt on profile changes so switching the setting takes effect
+        // without a restart.
+        stream: Profile.instance.changes,
+        builder: (context, _) => MaterialApp(
+          title: 'Rua Science',
+          debugShowCheckedModeBanner: false,
+          theme: buildTheme(Brightness.light),
+          darkTheme: buildTheme(Brightness.dark),
+          themeMode: _mode(Profile.instance.theme),
+          home: Builder(
+            // The one place the palette is pointed at a brightness. Inside
+            // MaterialApp so it follows the theme the framework actually
+            // resolved — including ThemeMode.system, which this widget cannot
+            // work out for itself — rather than a second copy of the decision
+            // that could disagree with it.
+            builder: (inner) {
+              applyPaletteFor(Theme.of(inner).brightness);
+              return Shell(storageFailed: storageFailed);
+            },
+          ),
+        ),
       );
 }
 

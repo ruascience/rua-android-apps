@@ -198,7 +198,7 @@ class _SleepPageState extends State<SleepPage> {
         padding: const EdgeInsets.all(18),
         child: Column(crossAxisAlignment: CrossAxisAlignment.start, children: [
           Row(children: [
-            const Icon(Icons.nightlight_round, color: kAccent, size: 20),
+            Icon(Icons.nightlight_round, color: kAccent, size: 20),
             const SizedBox(width: 10),
             Expanded(
               child: Text(
@@ -306,7 +306,7 @@ class _SleepPageState extends State<SleepPage> {
             decoration: BoxDecoration(
                 color: kCardAlt, borderRadius: BorderRadius.circular(12)),
             child: Row(children: [
-              const Icon(Icons.info_outline, size: 15, color: kMuted),
+              Icon(Icons.info_outline, size: 15, color: kMuted),
               const SizedBox(width: 8),
               Expanded(
                 child: Text(
@@ -370,7 +370,7 @@ class _SleepPageState extends State<SleepPage> {
                   color: kWarn.withValues(alpha: 0.12),
                   borderRadius: BorderRadius.circular(12)),
               child: Row(children: [
-                const Icon(Icons.help_outline, size: 16, color: kWarn),
+                Icon(Icons.help_outline, size: 16, color: kWarn),
                 const SizedBox(width: 10),
                 Expanded(
                   child: Text(
@@ -516,7 +516,7 @@ class _SleepPageState extends State<SleepPage> {
           child: Padding(
             padding: const EdgeInsets.symmetric(vertical: 18),
             child: Column(children: [
-              const Icon(Icons.airline_seat_individual_suite_outlined,
+              Icon(Icons.airline_seat_individual_suite_outlined,
                   size: 34, color: kMuted),
               const SizedBox(height: 8),
               Text('No naps',

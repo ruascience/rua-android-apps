@@ -99,6 +99,7 @@ class _ProfileEditPageState extends State<ProfileEditPage> {
   /// Kept in state rather than read from the profile at build time, so the
   /// screen behaves like the rest of the form: nothing is applied until Save.
   UnitSystem _units = Profile.instance.units;
+  AppTheme _theme = Profile.instance.theme;
   late final TextEditingController _goalSteps = TextEditingController(
       text: Profile.instance.goals.steps.toString());
   late final TextEditingController _goalKcal = TextEditingController(
@@ -113,6 +114,7 @@ class _ProfileEditPageState extends State<ProfileEditPage> {
 
   Future<void> _saveSettings() async {
     await Profile.instance.setUnits(_units);
+    await Profile.instance.setTheme(_theme);
     if (_goalsTouched) {
       final steps = int.tryParse(_goalSteps.text.trim());
       final kcal = int.tryParse(_goalKcal.text.trim());
@@ -336,6 +338,34 @@ class _ProfileEditPageState extends State<ProfileEditPage> {
               child: Column(
                 crossAxisAlignment: CrossAxisAlignment.start,
                 children: [
+                  Text('Appearance', style: t.textTheme.labelLarge),
+                  const SizedBox(height: 8),
+                  SegmentedButton<AppTheme>(
+                    segments: const [
+                      ButtonSegment(
+                          value: AppTheme.system,
+                          icon: Icon(Icons.brightness_auto, size: 16),
+                          label: Text('Auto')),
+                      ButtonSegment(
+                          value: AppTheme.light,
+                          icon: Icon(Icons.light_mode, size: 16),
+                          label: Text('Light')),
+                      ButtonSegment(
+                          value: AppTheme.dark,
+                          icon: Icon(Icons.dark_mode, size: 16),
+                          label: Text('Dark')),
+                    ],
+                    selected: {_theme},
+                    onSelectionChanged: (v) => setState(() => _theme = v.first),
+                  ),
+                  const SizedBox(height: 6),
+                  Text(
+                    'Auto follows the phone. The dark set is easier at night; '
+                    'the light one is readable in daylight, which is where a '
+                    'band gets looked at.',
+                    style: t.textTheme.bodySmall?.copyWith(color: kMuted),
+                  ),
+                  const Divider(height: 28),
                   Text('Units', style: t.textTheme.labelLarge),
                   const SizedBox(height: 8),
                   SegmentedButton<UnitSystem>(

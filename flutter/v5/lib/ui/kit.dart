@@ -32,31 +32,83 @@ import 'profile_edit.dart' show formatWeightKg;
 
 import '../analytics/metrics.dart';
 
+/// The palette, in two versions.
+///
+/// These used to be top-level `const Color`s and the app was dark-only. A
+/// wearable is opened outdoors in daylight, which is the one place a dark
+/// screen is hardest to read — so there is a light set too, and the names
+/// below resolve to whichever one is active.
+///
+/// Resolved through getters rather than through Theme.of(context) because 180
+/// call sites read these names directly, many of them outside a build method.
+/// The trade is that they are no longer compile-time constants; that is what
+/// makes them able to change.
+class Palette {
+  final Color bg, card, cardAlt, accent, accent2, warn, bad, green, text, muted;
+  const Palette({
+    required this.bg,
+    required this.card,
+    required this.cardAlt,
+    required this.accent,
+    required this.accent2,
+    required this.warn,
+    required this.bad,
+    required this.green,
+    required this.text,
+    required this.muted,
+  });
+}
+
 /// Warm near-black — the brand's paper, inverted, not a blue-black screen.
-const kBg = Color(0xFF12100E);
-const kCard = Color(0xFF1B1815);
-const kCardAlt = Color(0xFF232019);
+/// The accents are the mark's cool and warm strokes, lifted for a dark ground.
+const _darkPalette = Palette(
+  bg: Color(0xFF12100E),
+  card: Color(0xFF1B1815),
+  cardAlt: Color(0xFF232019),
+  accent: Color(0xFF7FA0DC),
+  accent2: Color(0xFF9B8AD4),
+  warn: Color(0xFFD98A3A),
+  bad: Color(0xFFD9614F),
+  green: Color(0xFF7FB49A),
+  text: Color(0xFFF2EFEA),
+  muted: Color(0xFF9A9289),
+);
 
-/// The mark's COOL stroke, lifted for a dark ground (brand `#5A6A94`).
-const kAccent = Color(0xFF7FA0DC);
+/// The brand's paper the right way up. The hues are the same family, taken
+/// DOWN in lightness rather than reused: the dark set is lifted for a dark
+/// ground, and those same values on white fail contrast for small text.
+const _lightPalette = Palette(
+  bg: Color(0xFFF7F4EF),
+  card: Color(0xFFFFFFFF),
+  cardAlt: Color(0xFFEFEAE2),
+  accent: Color(0xFF3F63A0),
+  accent2: Color(0xFF6250A8),
+  warn: Color(0xFF9C6620),
+  bad: Color(0xFFB23A31),
+  green: Color(0xFF3F6B56),
+  text: Color(0xFF1B1815),
+  muted: Color(0xFF6E655C),
+);
 
-/// Violet. Deliberately NOT a brand hue — see the note above.
-const kAccent2 = Color(0xFF9B8AD4);
+Palette _active = _darkPalette;
 
-/// The mark's WARM stroke, lifted for a dark ground (brand `#A55D1C`).
-const kWarn = Color(0xFFD98A3A);
-const kBad = Color(0xFFD9614F);
+/// Point the names below at the palette for [b]. Called from the one Builder
+/// under MaterialApp, so it follows the theme the framework resolved rather
+/// than a second copy of the decision.
+void applyPaletteFor(Brightness b) {
+  _active = b == Brightness.dark ? _darkPalette : _lightPalette;
+}
 
-/// The fourth series colour. Four rings need four legible hues and the brand
-/// supplies two, so this and [kAccent2] fill the gap — chosen desaturated, at
-/// the same weight as the brand pair, so the set reads as one family rather
-/// than as a brand plus two strangers. It replaces a #22C55E that was doing
-/// the job at three times the saturation of everything around it.
-const kGreen = Color(0xFF7FB49A);
-
-/// Warm off-white, echoing the brand's `#F7F5F2`.
-const kText = Color(0xFFF2EFEA);
-const kMuted = Color(0xFF9A9289);
+Color get kBg => _active.bg;
+Color get kCard => _active.card;
+Color get kCardAlt => _active.cardAlt;
+Color get kAccent => _active.accent;
+Color get kAccent2 => _active.accent2;
+Color get kWarn => _active.warn;
+Color get kBad => _active.bad;
+Color get kGreen => _active.green;
+Color get kText => _active.text;
+Color get kMuted => _active.muted;
 
 /// Newsreader — the brand serif. Figures and titles only.
 const kSerif = 'Newsreader';
@@ -68,19 +120,22 @@ const kSans = 'Archivo';
 /// where column alignment carries meaning.
 const kMono = 'IBMPlexMono';
 
-ThemeData buildTheme() {
-  final base = ThemeData.dark(useMaterial3: true);
-  final t = base.textTheme.apply(bodyColor: kText, displayColor: kText);
+ThemeData buildTheme([Brightness brightness = Brightness.dark]) {
+  final p = brightness == Brightness.dark ? _darkPalette : _lightPalette;
+  final base = brightness == Brightness.dark
+      ? ThemeData.dark(useMaterial3: true)
+      : ThemeData.light(useMaterial3: true);
+  final t = base.textTheme.apply(bodyColor: p.text, displayColor: p.text);
   return base.copyWith(
-    scaffoldBackgroundColor: kBg,
+    scaffoldBackgroundColor: p.bg,
     colorScheme: base.colorScheme.copyWith(
-      primary: kAccent,
-      secondary: kAccent2,
-      surface: kCard,
-      error: kBad,
+      primary: p.accent,
+      secondary: p.accent2,
+      surface: p.card,
+      error: p.bad,
     ),
-    cardTheme: const CardThemeData(
-      color: kCard,
+    cardTheme: CardThemeData(
+      color: p.card,
       elevation: 0,
       margin: EdgeInsets.zero,
       shape: RoundedRectangleBorder(
@@ -229,7 +284,7 @@ class SectionCard extends StatelessWidget {
                 ),
                 ?trailing,
                 if (trailing == null && onTap != null)
-                  const Icon(Icons.chevron_right, color: kMuted),
+                  Icon(Icons.chevron_right, color: kMuted),
               ]),
               const SizedBox(height: 14),
               child,
@@ -252,7 +307,12 @@ class BigStat extends StatelessWidget {
   @override
   Widget build(BuildContext context) {
     final t = Theme.of(context);
-    return Column(
+    // One node reading "battery, 84 percent" instead of three fragments —
+    // "84", "%", "battery" — arriving in the order they happen to be laid out.
+    return Semantics(
+      label: '$label, $value${unit.isEmpty ? '' : ' $unit'}',
+      excludeSemantics: true,
+      child: Column(
       crossAxisAlignment: CrossAxisAlignment.start,
       mainAxisSize: MainAxisSize.min,
       children: [
@@ -273,6 +333,7 @@ class BigStat extends StatelessWidget {
         ),
         Text(label, style: t.textTheme.labelSmall?.copyWith(color: kMuted)),
       ],
+      ),
     );
   }
 }
@@ -295,7 +356,10 @@ class EstimateTile extends StatelessWidget {
   Widget build(BuildContext context) {
     final t = Theme.of(context);
     if (estimate == null) {
-      return Column(
+      return Semantics(
+        label: 'Not available — $emptyHint',
+        excludeSemantics: true,
+        child: Column(
         crossAxisAlignment: CrossAxisAlignment.start,
         mainAxisSize: MainAxisSize.min,
         children: [
@@ -310,6 +374,7 @@ class EstimateTile extends StatelessWidget {
                     ?.copyWith(color: kMuted.withValues(alpha: 0.7))),
           ),
         ],
+        ),
       );
     }
     final e = estimate!;
@@ -351,8 +416,22 @@ class ActivityRings extends StatelessWidget {
     this.size = 130,
   });
 
+  /// Percentages rather than raw numbers: the figures are already spelled out
+  /// in the legend beside these, and repeating them would read the same values
+  /// twice. What the rings add is the PROPORTION, which is exactly what a
+  /// painted arc cannot say on its own.
+  String get _spoken {
+    String pct(double v, double goal) =>
+        '${((goal == 0 ? 0 : v / goal) * 100).round()} percent of goal';
+    return 'Activity rings. Steps ${pct(steps, stepGoal)}. '
+        'Calories ${pct(kcal, kcalGoal)}. Distance ${pct(km, kmGoal)}.';
+  }
+
   @override
-  Widget build(BuildContext context) => SizedBox(
+  Widget build(BuildContext context) => Semantics(
+        label: _spoken,
+        excludeSemantics: true,
+        child: SizedBox(
         width: size,
         height: size,
         child: CustomPaint(
@@ -365,6 +444,7 @@ class ActivityRings extends StatelessWidget {
             (kcal / (kcalGoal == 0 ? 1 : kcalGoal), kGreen),
             (km / (kmGoal == 0 ? 1 : kmGoal), kWarn),
           ]),
+        ),
         ),
       );
 }
@@ -402,12 +482,21 @@ class _RingPainter extends CustomPainter {
 }
 
 /// Compact sparkline for a metric's recent trend.
+/// One decimal at most: a spoken "seventy-two point four one three" is worse
+/// than useless.
+String _n(double v) =>
+    v == v.roundToDouble() ? v.round().toString() : v.toStringAsFixed(1);
+
 class Sparkline extends StatelessWidget {
   final List<double> values;
-  final Color color;
+  final Color? color;
   final double height;
+
+  /// `color` is nullable and resolved at build time rather than defaulted
+  /// here: the palette is no longer a compile-time constant, which is the
+  /// price of it being able to follow the theme.
   const Sparkline(this.values,
-      {super.key, this.color = kAccent, this.height = 46});
+      {super.key, this.color, this.height = 46});
 
   @override
   Widget build(BuildContext context) {
@@ -423,10 +512,26 @@ class Sparkline extends StatelessWidget {
         ),
       );
     }
-    return SizedBox(
-      height: height,
-      width: double.infinity,
-      child: CustomPaint(painter: _SparkPainter(values, color)),
+    final lo = values.reduce((a, b) => a < b ? a : b);
+    final hi = values.reduce((a, b) => a > b ? a : b);
+    final direction = values.last > values.first
+        ? 'rising'
+        : values.last < values.first
+            ? 'falling'
+            : 'level';
+    return Semantics(
+      // The shape of a line is the whole content of this widget, and a
+      // CustomPaint publishes nothing. Range and direction are what someone
+      // reads off it at a glance.
+      label: 'Trend, $direction. '
+          '${values.length} readings from ${_n(lo)} to ${_n(hi)}, '
+          'latest ${_n(values.last)}.',
+      excludeSemantics: true,
+      child: SizedBox(
+        height: height,
+        width: double.infinity,
+        child: CustomPaint(painter: _SparkPainter(values, color ?? kAccent)),
+      ),
     );
   }
 }

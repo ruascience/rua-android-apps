@@ -193,8 +193,20 @@ class _HistoryPageState extends State<HistoryPage> {
     final maxY = ys.reduce((a, b) => a > b ? a : b);
     final pad = ((maxY - minY).abs() * 0.1).clamp(0.5, 20.0);
     final span = xs.last - xs.first;
+    final mean = ys.reduce((a, b) => a + b) / ys.length;
+    String n(double v) =>
+        v == v.roundToDouble() ? v.round().toString() : v.toStringAsFixed(1);
 
-    return LineChart(
+    return Semantics(
+      // fl_chart draws to a canvas and publishes nothing, so this page was
+      // entirely empty to a screen reader — the one tab whose whole content is
+      // the graph. The summary is what a sighted reader takes from it at a
+      // glance: how many readings, over what period, and the shape of them.
+      label: '$_metric chart. ${_data.length} readings over the last '
+          '$_days days. Lowest ${n(minY)}, highest ${n(maxY)}, '
+          'average ${n(mean)}, latest ${n(_data.last.value)}.',
+      excludeSemantics: true,
+      child: LineChart(
       LineChartData(
         minY: minY - pad,
         maxY: maxY + pad,
@@ -250,6 +262,7 @@ class _HistoryPageState extends State<HistoryPage> {
             ),
           ),
         ],
+      ),
       ),
     );
   }

@@ -74,6 +74,9 @@ typedef ProfileMintGate = Future<bool> Function();
 /// bug this project has already been bitten by once.
 enum UnitSystem { metric, imperial }
 
+/// Which palette the app draws in. `system` follows the phone.
+enum AppTheme { system, light, dark }
+
 /// The daily targets the Activity rings are drawn against.
 ///
 /// These were four hardcoded constants — 10,000 / 400 / 5 / 30 — in a page
@@ -137,6 +140,7 @@ class Profile {
   static const _kPeriods = 'profile.period_starts';
   static const _kBandId = 'band.remote_id';
   static const _kUnits = 'profile.units';
+  static const _kTheme = 'profile.theme';
   static const _kGoalSteps = 'goal.steps';
   static const _kGoalKcal = 'goal.kcal';
   static const _kGoalKm = 'goal.km';
@@ -152,6 +156,10 @@ class Profile {
   /// Display units. Metric by default, because that is what the band reports
   /// and what every stored value is in.
   UnitSystem units = UnitSystem.metric;
+
+  /// Follows the phone by default. The app was dark-only, which is hardest to
+  /// read in the one place a wearable's app gets opened — outdoors.
+  AppTheme theme = AppTheme.system;
 
   /// Null until the user has set one, so [goals] can keep following the
   /// profile — a weight change should move a suggested calorie target, and
@@ -226,6 +234,9 @@ class Profile {
     // outliving the test that started it.
     if (_loaded) return;
     final p = await _p;
+    theme = AppTheme.values[
+        (p.getInt(_kTheme) ?? AppTheme.system.index)
+            .clamp(0, AppTheme.values.length - 1)];
     units = UnitSystem.values[
         (p.getInt(_kUnits) ?? UnitSystem.metric.index)
             .clamp(0, UnitSystem.values.length - 1)];
@@ -278,6 +289,11 @@ class Profile {
     _loaded = true;
   }
 
+  Future<void> setTheme(AppTheme t) async {
+    theme = t;
+    await save();
+  }
+
   Future<void> setUnits(UnitSystem u) async {
     units = u;
     await save();
@@ -315,6 +331,7 @@ class Profile {
 
     final p = await _p;
     await p.setInt(_kUnits, units.index);
+    await p.setInt(_kTheme, theme.index);
     if (_customGoals != null) {
       await p.setInt(_kGoalSteps, _customGoals!.steps);
       await p.setInt(_kGoalKcal, _customGoals!.kcal);

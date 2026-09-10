@@ -639,7 +639,7 @@ class _DevicePageState extends State<DevicePage> {
     final name = _sensorNames[sensor] ?? 'sensor $sensor';
     if (m == null) {
       return Row(children: [
-        const Icon(Icons.remove, size: 16, color: kMuted),
+        Icon(Icons.remove, size: 16, color: kMuted),
         const SizedBox(width: 8),
         Expanded(
             // NOT "unsupported": a silent sensor is an unknown, and reading
@@ -799,7 +799,7 @@ class _DevicePageState extends State<DevicePage> {
           title: 'Not connected',
           subtitle: 'Your band holds one Bluetooth link at a time',
           child: Column(children: [
-            const Icon(Icons.watch_off_outlined, size: 44, color: kMuted),
+            Icon(Icons.watch_off_outlined, size: 44, color: kMuted),
             const SizedBox(height: 14),
             Text(
               'If the band does not appear, close the vendor app — it keeps '

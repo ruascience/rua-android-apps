@@ -35,6 +35,29 @@ class _HomePageState extends State<HomePage> {
   /// coming back to: a plausible figure that is not a measurement.
   bool _clipped = false;
 
+  /// The day being shown. Home was fixed to the current one, so "how was
+  /// Tuesday" — the rings, recovery and strain for a past day — could not be
+  /// asked at all, even though every reading needed to answer it was already
+  /// on the phone.
+  DateTime _day = DateTime.now();
+
+  bool get _isToday {
+    final now = DateTime.now();
+    return _day.year == now.year && _day.month == now.month && _day.day == now.day;
+  }
+
+  DateTime get _dayStart => DateTime(_day.year, _day.month, _day.day);
+  DateTime get _dayEnd => _dayStart.add(const Duration(days: 1));
+
+  Future<void> _stepDay(int days) async {
+    final next = _dayStart.add(Duration(days: days));
+    // Never forward past today: there is no data there, and an empty screen
+    // for tomorrow reads as a fault rather than as a boundary.
+    if (next.isAfter(DateTime.now())) return;
+    setState(() => _day = next);
+    await _load();
+  }
+
   /// Which device the currently displayed data was loaded for. The shell uses
   /// an IndexedStack, so these pages are built once at startup — before any
   /// band is connected — and would otherwise sit empty forever.
@@ -136,9 +159,11 @@ class _HomePageState extends State<HomePage> {
     }
     if (!Profile.instance.loaded) await Profile.instance.load();
 
-    final since = DateTime.now().subtract(const Duration(days: 14));
-    final todayStart = DateTime.now().copyWith(
-        hour: 0, minute: 0, second: 0, millisecond: 0, microsecond: 0);
+    // The 14-day window still ends at the selected day: recovery compares a
+    // night against the fortnight BEFORE it, and a window that always ended
+    // today would compare a past day against readings that came after it.
+    final since = _dayStart.subtract(const Duration(days: 14));
+    final todayStart = _dayStart;
 
     // Raised from the 5,000 default. At a 5-minute sampling interval a
     // 14-day window is already ~4,000 rows before the band's 15-slot history
@@ -159,21 +184,32 @@ class _HomePageState extends State<HomePage> {
     final am =
         await Store.instance.read(dev, 'active_minutes', since: todayStart);
 
-    final rest = restingHeartRate(h);
-    final hrToday = h.where((s) => s.at.isAfter(todayStart)).toList();
+    // Everything is read from `since` forward, so the selected day's window
+    // has to be closed at its own end rather than running to now.
+    List<Sample> upToDay(List<Sample> xs) =>
+        xs.where((s) => s.at.isBefore(_dayEnd)).toList();
+    final rest = restingHeartRate(upToDay(h));
+    final hrToday = h
+        .where((s) => s.at.isAfter(todayStart) && s.at.isBefore(_dayEnd))
+        .toList();
+    List<Sample> onDay(List<Sample> xs) => xs
+        .where((s) => !s.at.isBefore(todayStart) && s.at.isBefore(_dayEnd))
+        .toList();
 
     if (!mounted) return;
     setState(() {
-      hr = h;
-      spo2 = o;
-      hrv = v;
-      temp = t;
-      steps = st.isEmpty ? 0 : st.last.value;
-      kcal = ca.isEmpty ? 0 : ca.last.value;
-      km = di.isEmpty ? 0 : di.last.value;
-      activeMin = am.isEmpty ? 0 : am.last.value;
+      hr = upToDay(h);
+      spo2 = upToDay(o);
+      hrv = upToDay(v);
+      temp = upToDay(t);
+      final stD = onDay(st), caD = onDay(ca), diD = onDay(di), amD = onDay(am);
+      steps = stD.isEmpty ? 0 : stD.last.value;
+      kcal = caD.isEmpty ? 0 : caD.last.value;
+      km = diD.isEmpty ? 0 : diD.last.value;
+      activeMin = amD.isEmpty ? 0 : amD.last.value;
       resting = rest;
-      recoveryScore = recovery(hrvHistory: v, hrHistory: h);
+      recoveryScore =
+          recovery(hrvHistory: upToDay(v), hrHistory: upToDay(h));
       strainScore =
           strain(hrToday: hrToday, age: Profile.instance.age, resting: rest);
       loading = false;
@@ -201,9 +237,49 @@ class _HomePageState extends State<HomePage> {
                     // The date, and no "Today" heading: the tab above this
                     // page already says Today, and printing it twice is the
                     // same word twice.
-                    Text(DateFormat('EEEE, d MMMM').format(DateTime.now()),
-                        style: t.textTheme.titleMedium
-                            ?.copyWith(fontWeight: FontWeight.w600)),
+                    Row(children: [
+                      IconButton(
+                        visualDensity: VisualDensity.compact,
+                        tooltip: 'Previous day',
+                        onPressed: () => _stepDay(-1),
+                        icon: const Icon(Icons.chevron_left, size: 20),
+                      ),
+                      Flexible(
+                        child: GestureDetector(
+                          // Tapping the date returns to today, which is the
+                          // one navigation anybody wants after browsing back.
+                          onTap: _isToday
+                              ? null
+                              : () async {
+                                  setState(() => _day = DateTime.now());
+                                  await _load();
+                                },
+                          child: Text(
+                            _isToday
+                                ? DateFormat('EEEE, d MMMM').format(_day)
+                                : DateFormat('EEE, d MMM').format(_day),
+                            style: t.textTheme.titleMedium
+                                ?.copyWith(fontWeight: FontWeight.w600),
+                          ),
+                        ),
+                      ),
+                      IconButton(
+                        visualDensity: VisualDensity.compact,
+                        tooltip: 'Next day',
+                        // Disabled rather than hidden: a control that vanishes
+                        // at the edge moves everything beside it.
+                        onPressed: _isToday ? null : () => _stepDay(1),
+                        icon: const Icon(Icons.chevron_right, size: 20),
+                      ),
+                      if (!_isToday)
+                        TextButton(
+                          onPressed: () async {
+                            setState(() => _day = DateTime.now());
+                            await _load();
+                          },
+                          child: const Text('Today'),
+                        ),
+                    ]),
                   ],
                 ),
               ),
@@ -314,7 +390,7 @@ class _HomePageState extends State<HomePage> {
         // than drawing empty rings, which read as "you walked nowhere".
         child: (steps == 0 && kcal == 0 && km == 0)
             ? Row(children: [
-                const Icon(Icons.directions_walk, color: kMuted, size: 30),
+                Icon(Icons.directions_walk, color: kMuted, size: 30),
                 const SizedBox(width: 14),
                 Expanded(
                   child: Text(
@@ -545,7 +621,7 @@ class _HomePageState extends State<HomePage> {
         subtitle: 'nothing recorded yet',
         tint: kCardAlt,
         child: Row(children: [
-          const Icon(Icons.thermostat, color: kMuted, size: 30),
+          Icon(Icons.thermostat, color: kMuted, size: 30),
           const SizedBox(width: 14),
           Expanded(
             child: Text(
