@@ -25,6 +25,31 @@ class DevicePage extends StatefulWidget {
   State<DevicePage> createState() => _DevicePageState();
 }
 
+/// One measurement's outcome — values, or the reason there were none.
+class _Measurement {
+  final DateTime? at;
+  final int heartRate, spo2, hrvMs;
+  final double? celsius;
+  final String? detail;
+
+  const _Measurement({
+    required this.at,
+    this.heartRate = 0,
+    this.spo2 = 0,
+    this.hrvMs = 0,
+    this.celsius,
+  }) : detail = null;
+
+  const _Measurement.failed(this.detail)
+      : at = null,
+        heartRate = 0,
+        spo2 = 0,
+        hrvMs = 0,
+        celsius = null;
+
+  bool get ok => detail == null;
+}
+
 class _DevicePageState extends State<DevicePage> {
   final link = BandLink.instance;
   final Map<int, j.AutoMonitor?> _monitors = {};
@@ -255,70 +280,175 @@ class _DevicePageState extends State<DevicePage> {
     });
   }
 
-  Future<void> _measure() => _run('Measuring — keep still', () async {
-        final start = link.replies.length;
-        await link.sendOp(j.opMeasure,
-            payload: j.measurePayload(on: true),
-            wait: const Duration(milliseconds: 600));
+  /// The last measurement, kept on screen.
+  ///
+  /// This used to live only in a SnackBar, which is gone in four seconds and
+  /// leaves the screen exactly as it was — so a measurement that WORKED and
+  /// one that failed looked identical a moment later. It is state now, and the
+  /// Device screen shows it until the next one replaces it.
+  _Measurement? _lastMeasurement;
 
-        // The band acks immediately with an all-zero frame and only sends
-        // real values ~30 s later. Taking the ack for the answer cancels the
-        // measurement every time, so wait for a frame that actually parses.
-        j.LiveReading? got;
-        final deadline = DateTime.now().add(const Duration(seconds: 60));
-        while (DateTime.now().isBefore(deadline) && got == null) {
-          await Future.delayed(const Duration(milliseconds: 500));
-          for (final r in link.replies.skip(start)) {
-            if (r.opcode != j.opMeasure) continue;
-            final p = j.parseOnDemand(r.data);
-            if (p != null && p.hasAnything) {
-              got = p;
-              break;
+  /// Seconds elapsed in the current measurement, for the countdown.
+  int _measureElapsed = 0;
+
+  Future<void> _measure() => _run('Measuring — keep still', () async {
+        // Collected by SUBSCRIPTION rather than by index into link.replies.
+        // That list is trimmed at 4000 entries, so `replies.skip(start)` with
+        // a start captured before the wait silently skips real frames once the
+        // buffer has rotated — a measurement that returned nothing, with the
+        // frames present the whole time.
+        final seen = <Reply>[];
+        final sub = link.onReply.listen(seen.add);
+        setState(() {
+          _measureElapsed = 0;
+          _lastMeasurement = null;
+        });
+
+        try {
+          await link.sendOp(j.opMeasure,
+              payload: j.measurePayload(on: true),
+              wait: const Duration(milliseconds: 600));
+
+          // The band acks immediately with an all-zero frame and only sends
+          // real values ~30 s later. Taking the ack for the answer cancels the
+          // measurement every time, so wait for a frame that actually parses.
+          j.LiveReading? got;
+          final deadline = DateTime.now().add(const Duration(seconds: 60));
+          while (DateTime.now().isBefore(deadline) && got == null) {
+            await Future.delayed(const Duration(milliseconds: 500));
+            if (mounted) {
+              setState(() => _measureElapsed =
+                  60 - deadline.difference(DateTime.now()).inSeconds);
+            }
+            for (final r in seen) {
+              if (r.opcode != j.opMeasure) continue;
+              final parsed = j.parseOnDemand(r.data);
+              if (parsed != null && parsed.hasAnything) {
+                got = parsed;
+                break;
+              }
             }
           }
-        }
-        // Temperature only exists in the realtime frame, so grab it while
-        // the sensor is still running rather than in a second pass.
-        double? tempC;
-        for (final r in link.replies.skip(start)) {
-          final c = j.parseRealtimeTemperature(r.data);
-          if (c != null) tempC = c;
-        }
-        tempC ??= await link.measureTemperature(
-            limit: const Duration(seconds: 30));
 
-        await link.sendOp(j.opMeasure, payload: j.measurePayload(on: false));
+          double? tempC;
+          for (final r in seen) {
+            final c = j.parseRealtimeTemperature(r.data);
+            if (c != null) tempC = c;
+          }
+          tempC ??= await link.measureTemperature(
+              limit: const Duration(seconds: 30));
 
-        if (tempC != null) {
-          await Store.instance.putSamples(
-              link.deviceName, 'temperature', [Sample(DateTime.now(), tempC)]);
-        }
+          await link.sendOp(j.opMeasure, payload: j.measurePayload(on: false));
 
-        if (got == null && tempC == null) {
-          link.log.add('no reading — sensor did not converge');
-          return;
-        }
-        final now = DateTime.now();
-        final dev = link.deviceName;
-        Future<void> put(String m, num v) =>
-            Store.instance.putSamples(dev, m, [Sample(now, v.toDouble())]);
-        if (got != null) {
-          if (got.heartRate > 0) await put('heart_rate', got.heartRate);
-          if (got.spo2 > 0) await put('spo2', got.spo2);
-          if (got.hrvMs > 0) await put('hrv', got.hrvMs);
-        }
-        await _refreshCounts();
-        if (mounted) {
-          final bits = <String>[
-            if (got != null && got.heartRate > 0) 'HR ${got.heartRate}',
-            if (got != null && got.spo2 > 0) 'SpO₂ ${got.spo2}%',
-            if (got != null && got.hrvMs > 0) 'HRV ${got.hrvMs} ms',
-            if (tempC != null) '${tempC.toStringAsFixed(1)} °C',
-          ];
-          ScaffoldMessenger.of(context).showSnackBar(
-              SnackBar(content: Text(bits.join(' · '))));
+          if (got == null && tempC == null) {
+            // Say so, ON THE SCREEN, and say what came back. A silent return
+            // that appended one line to the activity log is why this read as
+            // "the app does nothing" — the band measures, the bar stops, and
+            // nothing anywhere states the outcome.
+            //
+            // The frame summary is here because this is the one failure that
+            // cannot be diagnosed from the app: parseOnDemand accepts a reply
+            // only when byte[1] == 1, and a band that answers with another
+            // sub-code fails exactly like a sensor that never converged.
+            final measureFrames =
+                seen.where((r) => r.opcode == j.opMeasure).toList();
+            final detail = measureFrames.isEmpty
+                ? 'the band sent no 0x${j.opMeasure.toRadixString(16)} reply at all '
+                    '(${seen.length} frames of other kinds arrived)'
+                : '${measureFrames.length} replies arrived but none carried a '
+                    'reading — last was ${_bytes(measureFrames.last.data)}';
+            if (mounted) {
+              setState(() => _lastMeasurement = _Measurement.failed(detail));
+            }
+            link.log.add('measure failed: $detail');
+            return;
+          }
+
+          final now = DateTime.now();
+          final dev = link.deviceName;
+          Future<void> put(String m, num v) =>
+              Store.instance.putSamples(dev, m, [Sample(now, v.toDouble())]);
+          if (tempC != null) {
+            await put('temperature', tempC);
+          }
+          if (got != null) {
+            if (got.heartRate > 0) await put('heart_rate', got.heartRate);
+            if (got.spo2 > 0) await put('spo2', got.spo2);
+            if (got.hrvMs > 0) await put('hrv', got.hrvMs);
+          }
+          await _refreshCounts();
+          if (mounted) {
+            setState(() => _lastMeasurement = _Measurement(
+                  at: now,
+                  heartRate: got?.heartRate ?? 0,
+                  spo2: got?.spo2 ?? 0,
+                  hrvMs: got?.hrvMs ?? 0,
+                  celsius: tempC,
+                ));
+          }
+        } finally {
+          await sub.cancel();
+          if (mounted) setState(() => _measureElapsed = 0);
         }
       });
+
+  /// First bytes of a frame, for a failure message someone can act on.
+  static String _bytes(List<int> data) {
+    final head = data.take(8).map((b) => b.toRadixString(16).padLeft(2, '0'));
+    return '${head.join(' ')}${data.length > 8 ? ' …' : ''} '
+        '(${data.length} bytes)';
+  }
+
+  /// What the last measurement produced, or why it produced nothing.
+  Widget _measurementCard(ThemeData t) {
+    final m = _lastMeasurement;
+    if (m == null) return const SizedBox.shrink();
+    return Card(
+      child: Padding(
+        padding: const EdgeInsets.all(16),
+        child: Column(crossAxisAlignment: CrossAxisAlignment.start, children: [
+          Row(children: [
+            Icon(m.ok ? Icons.check_circle_outline : Icons.error_outline,
+                size: 18, color: m.ok ? kGreen : kBad),
+            const SizedBox(width: 8),
+            Text(m.ok ? 'Last measurement' : 'Measurement produced nothing',
+                style: t.textTheme.titleSmall),
+            const Spacer(),
+            if (m.ok) Lab(DateFormat.Hm().format(m.at!)),
+          ]),
+          const SizedBox(height: 10),
+          if (!m.ok) ...[
+            Text(
+              'The band ran the sensor, but the app could not read a value '
+              'out of what came back.',
+              style: t.textTheme.bodySmall,
+            ),
+            const SizedBox(height: 8),
+            Basis(m.detail!),
+          ] else
+            Row(children: [
+              if (m.heartRate > 0)
+                Expanded(child: _mv('${m.heartRate}', 'bpm', kBad)),
+              if (m.spo2 > 0) Expanded(child: _mv('${m.spo2}', '%', kAccent)),
+              if (m.hrvMs > 0) Expanded(child: _mv('${m.hrvMs}', 'ms', kGreen)),
+              if (m.celsius != null)
+                Expanded(
+                    child: _mv(
+                        Units.of(profile)
+                            .temperatureValue(m.celsius!)
+                            .toStringAsFixed(1),
+                        Units.of(profile).temperatureUnit,
+                        kWarn)),
+            ]),
+        ]),
+      ),
+    );
+  }
+
+  Widget _mv(String value, String unit, Color c) => Column(
+        crossAxisAlignment: CrossAxisAlignment.start,
+        children: [Figure(value, unit: unit, size: 24, color: c), Lab(unit)],
+      );
 
   Future<void> _loadMonitors() async {
     if (!link.connected || _monitorBusy) return;
@@ -750,7 +880,9 @@ class _DevicePageState extends State<DevicePage> {
               builder: (context, _) {
                 final svc = SyncService.instance;
                 final detail = [
-                  busyLabel,
+                  _measureElapsed > 0
+                      ? '$busyLabel · ${_measureElapsed}s of 60'
+                      : busyLabel,
                   if (svc.busy && svc.phase.isNotEmpty) svc.phase,
                   if (svc.storedThisRun > 0) '${svc.storedThisRun} stored',
                 ].where((s) => s.isNotEmpty).join(' · ');
@@ -989,6 +1121,10 @@ class _DevicePageState extends State<DevicePage> {
             ]),
           ]),
         ),
+        if (_lastMeasurement != null) ...[
+          const SizedBox(height: 12),
+          _measurementCard(t),
+        ],
         const SizedBox(height: 12),
         _backgroundCard(t),
         const SizedBox(height: 12),
