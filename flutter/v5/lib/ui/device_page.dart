@@ -40,6 +40,15 @@ class _Measurement {
     this.celsius,
   }) : detail = null;
 
+  /// Temperature only: the on-demand reading never parsed.
+  const _Measurement.partial({
+    required this.at,
+    required this.celsius,
+    required this.detail,
+  })  : heartRate = 0,
+        spo2 = 0,
+        hrvMs = 0;
+
   const _Measurement.failed(this.detail)
       : at = null,
         heartRate = 0,
@@ -48,6 +57,9 @@ class _Measurement {
         celsius = null;
 
   bool get ok => detail == null;
+
+  /// Something arrived, but not the reading that was asked for.
+  bool get partial => detail != null && celsius != null;
 }
 
 class _DevicePageState extends State<DevicePage> {
@@ -298,7 +310,18 @@ class _DevicePageState extends State<DevicePage> {
         // buffer has rotated — a measurement that returned nothing, with the
         // frames present the whole time.
         final seen = <Reply>[];
-        final sub = link.onReply.listen(seen.add);
+        // Logged as they arrive, not just counted. The 60-second wait was
+        // completely silent: between "scan done" and "measuring temperature"
+        // the activity log showed nothing at all, so a band that answers in an
+        // unexpected shape is indistinguishable from one that answers not at
+        // all — and neither can be diagnosed after the fact.
+        final sub = link.onReply.listen((r) {
+          seen.add(r);
+          if (r.opcode == j.opMeasure || seen.length <= 12) {
+            link.log.add('frame 0x${r.opcode.toRadixString(16)} '
+                '${_bytes(r.data)}');
+          }
+        });
         setState(() {
           _measureElapsed = 0;
           _lastMeasurement = null;
@@ -339,6 +362,35 @@ class _DevicePageState extends State<DevicePage> {
               limit: const Duration(seconds: 30));
 
           await link.sendOp(j.opMeasure, payload: j.measurePayload(on: false));
+
+          // Temperature arrives on its own path (0x25) and succeeds on this
+          // band when the on-demand reading does not. Reporting that as a
+          // completed measurement is how "Measure now does nothing" looked
+          // like a working feature: the panel filled in with 33.8 °C and said
+          // nothing about the three values that never came.
+          if (got == null && tempC != null) {
+            final measureFrames =
+                seen.where((r) => r.opcode == j.opMeasure).toList();
+            final detail = measureFrames.isEmpty
+                ? 'no 0x${j.opMeasure.toRadixString(16)} reply arrived in 60 s '
+                    '(${seen.length} other frames did)'
+                : '${measureFrames.length} 0x${j.opMeasure.toRadixString(16)} '
+                    'replies arrived, none carried a reading — '
+                    'last ${_bytes(measureFrames.last.data)}';
+            await link.sendOp(j.opMeasure, payload: j.measurePayload(on: false));
+            await Store.instance.putSamples(link.deviceName, 'temperature',
+                [Sample(DateTime.now(), tempC)]);
+            await _refreshCounts();
+            if (mounted) {
+              setState(() => _lastMeasurement = _Measurement.partial(
+                    at: DateTime.now(),
+                    celsius: tempC,
+                    detail: detail,
+                  ));
+            }
+            link.log.add('measure partial: $detail');
+            return;
+          }
 
           if (got == null && tempC == null) {
             // Say so, ON THE SCREEN, and say what came back. A silent return
@@ -408,19 +460,50 @@ class _DevicePageState extends State<DevicePage> {
         padding: const EdgeInsets.all(16),
         child: Column(crossAxisAlignment: CrossAxisAlignment.start, children: [
           Row(children: [
-            Icon(m.ok ? Icons.check_circle_outline : Icons.error_outline,
-                size: 18, color: m.ok ? kGreen : kBad),
+            Icon(
+                m.ok
+                    ? Icons.check_circle_outline
+                    : m.partial
+                        ? Icons.warning_amber
+                        : Icons.error_outline,
+                size: 18,
+                color: m.ok
+                    ? kGreen
+                    : m.partial
+                        ? kWarn
+                        : kBad),
             const SizedBox(width: 8),
-            Text(m.ok ? 'Last measurement' : 'Measurement produced nothing',
+            Text(
+                m.ok
+                    ? 'Last measurement'
+                    : m.partial
+                        ? 'Only skin temperature came back'
+                        : 'Measurement produced nothing',
                 style: t.textTheme.titleSmall),
             const Spacer(),
             if (m.ok) Lab(DateFormat.Hm().format(m.at!)),
           ]),
           const SizedBox(height: 10),
           if (!m.ok) ...[
+            if (m.partial) ...[
+              Row(children: [
+                Figure(
+                    Units.of(profile)
+                        .temperatureValue(m.celsius!)
+                        .toStringAsFixed(1),
+                    unit: Units.of(profile).temperatureUnit,
+                    size: 24,
+                    color: kWarn),
+              ]),
+              const SizedBox(height: 8),
+            ],
             Text(
-              'The band ran the sensor, but the app could not read a value '
-              'out of what came back.',
+              m.partial
+                  ? 'Heart rate, blood oxygen and HRV did not arrive. '
+                      'Temperature comes back on a different command, which is '
+                      'why it worked.'
+                  : 'The band ran the sensor, but the app could not read a '
+                      'value out of what came back.',
               style: t.textTheme.bodySmall,
             ),
             const SizedBox(height: 8),
