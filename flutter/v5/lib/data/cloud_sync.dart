@@ -38,6 +38,7 @@ import 'package:http/io_client.dart';
 import 'package:shared_preferences/shared_preferences.dart';
 
 import 'profile.dart';
+import 'session.dart';
 import 'store.dart';
 import 'uuid.dart';
 
@@ -49,8 +50,6 @@ class CloudSync {
 
   static const _kBase = 'cloud.base_url';
   static const _kEnabled = 'cloud.enabled';
-  static const _kUser = 'cloud.auth_user';
-  static const _kPass = 'cloud.auth_pass';
 
   /// The server in AKS, reached by address: there is no hostname for it, so
   /// there is no TLS either. `localhost` would be the PHONE, which is the
@@ -93,31 +92,7 @@ jyhn7zPAyvS/SaEpVHhuQqTEmCXhVlF8U9P2gm2e1crp5ZG/BTwi/MpzI3cSOGlL
   /// The same certificate as DER, base64, for the exact-match fallback below.
   static const _pinnedDerB64 = 'MIIDOzCCAiOgAwIBAgIUO1pBbiMquqXYUlv6jfvXfQP7RMYwDQYJKoZIhvcNAQELBQAwJDEUMBIGA1UEAwwLYXVyYS12NS1hcGkxDDAKBgNVBAoMA1JVQTAeFw0yNjA5MDkxODM1MzdaFw0yODEyMTIxODM1MzdaMCQxFDASBgNVBAMMC2F1cmEtdjUtYXBpMQwwCgYDVQQKDANSVUEwggEiMA0GCSqGSIb3DQEBAQUAA4IBDwAwggEKAoIBAQCen1neZtsDpENJen2SWRXTjKzS6//SV0Ra/4BYQm+FVYOb/C4YEJ0L1jHzJW9hMWl0cBEnSBYGatk9rjnOw+38Y/PWbtdb8CwGHBwqwYm6lz3KRk0teSxzv3JD+q1civ91aodMGBhp+Z4BOGE2riH/HNJIiXruKF9/3oKoxdYrFJTMxXLVJA7zr4Y4v5zoqnvnS9PqDwKT+T7s2UT8BFP0XC5XnQizkuXbc7TUC04EhcX0vRdNyCq4QhTwODPOdB+BbGzwENZL1htjKKCCi96as5VQKH+qV3oku1sL9OtHCFPFdmlqxGTVe/rtY5qC+Kkl4k+pJ+64lIO4w8pG2+r1AgMBAAGjZTBjMAwGA1UdEwEB/wQCMAAwDgYDVR0PAQH/BAQDAgWgMBMGA1UdJQQMMAoGCCsGAQUFBwMBMA8GA1UdEQQIMAaHBDDKwaQwHQYDVR0OBBYEFC/ROoEbSka6OYLSqCIjIDHFglhdMA0GCSqGSIb3DQEBCwUAA4IBAQA2TlVPiQX0uR4Yf/vt6B59cdl6222tqXRWcSCB0IiTieIQnRQR9jL1k0HXBopSExdbYvMYoqyAPNWY5jGOUcB49G+kldr0P/nlx0yfEFRa5BJU0AJiI3pPsS7wPHWCEsOFnWcGqvxXJXkm0b+pf1Cg46byQUQPUOi0u3S5PaRtdUWRgNnRcWO46VNONLHHo49Kjyhn7zPAyvS/SaEpVHhuQqTEmCXhVlF8U9P2gm2e1crp5ZG/BTwi/MpzI3cSOGlL9eRrzQa082rsFbxQSrOt0LmBNyiqDOrM3B/KfRZo7UX5N7PICJWAaj0p89T62Ql+5R4ilAjIHIhrmRO29Wrn';
 
-  /// HTTP Basic, required by every /api route since the server moved off the
-  /// LAN. Supplied at BUILD time, not committed:
-  ///
-  ///   flutter build apk --release \
-  ///     --dart-define=AURA_AUTH_USER=rua-band \
-  ///     --dart-define=AURA_AUTH_PASS=...
-  ///
-  /// This repository is public, which is the whole reason these are not
-  /// literals here — a credential in a public repository is scraped within
-  /// minutes and cannot be unpublished. The value still ends up inside the
-  /// APK and is readable by anyone who unpacks it, so it is a shared pilot
-  /// credential rather than a secret; keeping it out of git is what stops it
-  /// being a PUBLISHED one.
-  ///
-  /// Built without them, the app starts with no credentials and every sync
-  /// answers 401 — which is retryable, so the outbox pauses rather than
-  /// drains, and the Cloud settings screen can supply them by hand.
-  static const defaultAuthUser =
-      String.fromEnvironment('AURA_AUTH_USER', defaultValue: '');
-  static const defaultAuthPass =
-      String.fromEnvironment('AURA_AUTH_PASS', defaultValue: '');
-
   String baseUrl = defaultBaseUrl;
-  String authUser = defaultAuthUser;
-  String authPass = defaultAuthPass;
   bool enabled = true;
 
   CloudState state = CloudState.idle;
@@ -165,14 +140,22 @@ jyhn7zPAyvS/SaEpVHhuQqTEmCXhVlF8U9P2gm2e1crp5ZG/BTwi/MpzI3cSOGlL
     }
   }
 
-  /// Basic credentials for every /api request. Omitted entirely when unset,
-  /// so a build pointed at an older unauthenticated server still works.
-  Map<String, String> get _authHeaders => authUser.isEmpty && authPass.isEmpty
-      ? const {}
-      : {
-          'Authorization':
-              'Basic ${base64Encode(utf8.encode('$authUser:$authPass'))}',
-        };
+  /// Basic credentials for every /api request: the signed-in person's
+  /// username and the TOKEN their login returned.
+  ///
+  /// This was one credential compiled into every build — the app
+  /// authenticating as itself, identical on every phone, which told the
+  /// server nothing about whose readings these are. Empty when nobody is
+  /// signed in, which the server answers with a 401; that is retryable, so
+  /// the outbox pauses rather than discarding a backlog.
+  Map<String, String> get _authHeaders {
+    final s = Session.instance;
+    if (!s.signedIn) return const {};
+    return {
+      'Authorization':
+          'Basic ${base64Encode(utf8.encode('${s.username}:${s.token}'))}',
+    };
+  }
 
   Map<String, String> get _jsonHeaders => {
         'Content-Type': 'application/json',
@@ -264,8 +247,6 @@ jyhn7zPAyvS/SaEpVHhuQqTEmCXhVlF8U9P2gm2e1crp5ZG/BTwi/MpzI3cSOGlL
       final p = await SharedPreferences.getInstance();
       baseUrl = p.getString(_kBase) ?? defaultBaseUrl;
       enabled = p.getBool(_kEnabled) ?? true;
-      authUser = p.getString(_kUser) ?? defaultAuthUser;
-      authPass = p.getString(_kPass) ?? defaultAuthPass;
     } catch (_) {
       // Preferences unavailable — carry on with the defaults rather than
       // leaving sync switched off for a reason the user cannot see.
@@ -304,16 +285,6 @@ jyhn7zPAyvS/SaEpVHhuQqTEmCXhVlF8U9P2gm2e1crp5ZG/BTwi/MpzI3cSOGlL
     if (v) unawaited(flush());
   }
 
-  Future<void> setAuth(String user, String pass) async {
-    authUser = user.trim();
-    authPass = pass;
-    try {
-      final p = await SharedPreferences.getInstance();
-      await p.setString(_kUser, authUser);
-      await p.setString(_kPass, authPass);
-    } catch (_) {}
-    _emit();
-  }
 
   Future<void> setBaseUrl(String url) async {
     baseUrl = url.trim().replaceAll(RegExp(r'/+$'), '');

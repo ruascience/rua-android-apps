@@ -9,7 +9,10 @@ import 'package:intl/intl.dart';
 import '../ble/band_link.dart';
 import '../data/profile.dart';
 import '../data/background.dart';
+import 'package:http/http.dart' as http;
+
 import '../data/cloud_sync.dart';
+import '../data/session.dart';
 import '../data/store.dart';
 import '../data/sync_service.dart';
 import '../protocol/jstyle.dart' as j;
@@ -84,11 +87,7 @@ class _DevicePageState extends State<DevicePage> {
   final bool showAdvancedCards = false;
   late final TextEditingController _urlCtl =
       TextEditingController(text: cloud.baseUrl);
-  late final TextEditingController _userCtl =
-      TextEditingController(text: cloud.authUser);
-  late final TextEditingController _passCtl =
-      TextEditingController(text: cloud.authPass);
-  bool _showPass = false;
+
 
   /// Live scan results. BandLink publishes each device as it is heard, and
   /// this page rebuilds on link.changes, so the list fills in as the scan
@@ -113,8 +112,6 @@ class _DevicePageState extends State<DevicePage> {
   @override
   void dispose() {
     _urlCtl.dispose();
-    _userCtl.dispose();
-    _passCtl.dispose();
     super.dispose();
   }
 
@@ -152,14 +149,6 @@ class _DevicePageState extends State<DevicePage> {
   static String _short(String e) =>
       e.length <= 90 ? e : '${e.substring(0, 90)}…';
 
-  /// Persist whatever is in the credential fields.
-  ///
-  /// Called from both the Test button and either field's submit, so a user
-  /// who types a token and taps Test does not silently test the old one.
-  Future<void> _saveAuth() async {
-    await cloud.setAuth(_userCtl.text, _passCtl.text);
-    if (mounted) setState(() {});
-  }
 
   /// Hand the stored readings to the share sheet as a real file.
   ///
@@ -668,6 +657,62 @@ class _DevicePageState extends State<DevicePage> {
         },
       );
 
+  /// Who is signed in, and the way out.
+  ///
+  /// Sign out is here rather than buried in profile settings because it is the
+  /// one control whose absence is a privacy problem: a phone handed to the
+  /// next participant with the last one still signed in would file their
+  /// readings under the wrong person, and nothing downstream could tell.
+  Widget _accountCard(ThemeData t) => StreamBuilder<void>(
+        stream: Session.instance.changes,
+        builder: (context, _) {
+          final s = Session.instance;
+          return Card(
+            child: ListTile(
+              leading: Icon(
+                  s.isAdmin ? Icons.admin_panel_settings_outlined
+                            : Icons.badge_outlined,
+                  color: kMuted),
+              title: Text(s.displayName?.isNotEmpty == true
+                  ? s.displayName!
+                  : (s.username ?? 'Not signed in')),
+              subtitle: Text(
+                  s.isAdmin
+                      ? 'Signed in as an admin — you can see every profile'
+                      : 'Your readings are stored against this account',
+                  style: TextStyle(color: kMuted, fontSize: 11)),
+              trailing: TextButton(
+                onPressed: () async {
+                  final go = await showDialog<bool>(
+                    context: context,
+                    builder: (c) => AlertDialog(
+                      title: const Text('Sign out'),
+                      content: const Text(
+                          'Readings already on this phone stay here, and will '
+                          'be sent when someone signs in again. Anything not '
+                          'yet sent waits.'),
+                      actions: [
+                        TextButton(
+                            onPressed: () => Navigator.pop(c, false),
+                            child: const Text('Cancel')),
+                        FilledButton(
+                            onPressed: () => Navigator.pop(c, true),
+                            child: const Text('Sign out')),
+                      ],
+                    ),
+                  );
+                  if (go == true) {
+                    await Session.instance.signOut(
+                        baseUrl: cloud.baseUrl, client: http.Client());
+                  }
+                },
+                child: const Text('Sign out'),
+              ),
+            ),
+          );
+        },
+      );
+
   /// Cloud sync status.
   ///
   /// Shown with a PENDING COUNT rather than a tick, because "synced" is not a
@@ -751,56 +796,11 @@ class _DevicePageState extends State<DevicePage> {
                       },
                     ),
                     const SizedBox(height: 10),
-                    // The credential belongs beside the URL it authenticates
-                    // to. Without these fields, pointing the app at another
-                    // server left no way to authenticate to it: every sync
-                    // answered 401 and the outbox simply paused.
-                    Row(children: [
-                      Expanded(
-                        child: TextField(
-                          controller: _userCtl,
-                          autocorrect: false,
-                          enableSuggestions: false,
-                          decoration: const InputDecoration(
-                            labelText: 'Username',
-                            isDense: true,
-                            border: OutlineInputBorder(),
-                          ),
-                          onSubmitted: (_) => _saveAuth(),
-                        ),
-                      ),
-                      const SizedBox(width: 8),
-                      Expanded(
-                        child: TextField(
-                          controller: _passCtl,
-                          obscureText: !_showPass,
-                          autocorrect: false,
-                          enableSuggestions: false,
-                          decoration: InputDecoration(
-                            labelText: 'Token',
-                            isDense: true,
-                            border: const OutlineInputBorder(),
-                            suffixIcon: IconButton(
-                              tooltip: _showPass ? 'Hide token' : 'Show token',
-                              icon: Icon(
-                                  _showPass
-                                      ? Icons.visibility_off
-                                      : Icons.visibility,
-                                  size: 18),
-                              onPressed: () =>
-                                  setState(() => _showPass = !_showPass),
-                            ),
-                          ),
-                          onSubmitted: (_) => _saveAuth(),
-                        ),
-                      ),
-                    ]),
                     const SizedBox(height: 10),
                     Wrap(spacing: 8, runSpacing: 8, children: [
                       OutlinedButton.icon(
                         onPressed: () async {
                           await cloud.setBaseUrl(_urlCtl.text);
-                          await _saveAuth();
                           final ok = await cloud.ping();
                           if (!context.mounted) return;
                           ScaffoldMessenger.of(context).showSnackBar(SnackBar(
@@ -1141,6 +1141,8 @@ class _DevicePageState extends State<DevicePage> {
         const SizedBox(height: 12),
         _backgroundCard(t),
         const SizedBox(height: 12),
+        _accountCard(t),
+        const SizedBox(height: 12),
         _cloudCard(t),
         if (showAdvancedCards) ...[
           const SizedBox(height: 12),
@@ -1212,6 +1214,8 @@ class _DevicePageState extends State<DevicePage> {
         _backgroundCard(t),
         const SizedBox(height: 12),
         _toolsCard(t),
+        const SizedBox(height: 12),
+        _accountCard(t),
         const SizedBox(height: 12),
         _cloudCard(t),
         if (showAdvancedCards) ...[

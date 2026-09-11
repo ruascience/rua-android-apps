@@ -7,6 +7,7 @@ import 'package:aurav5/ui/trends_page.dart';
 import 'package:aurav5/ui/lab_page.dart';
 import 'package:aurav5/ui/sleep_page.dart';
 import 'package:aurav5/ui/kit.dart';
+import 'package:aurav5/data/session.dart';
 import 'package:flutter_test/flutter_test.dart';
 import 'package:aurav5/main.dart';
 import 'package:shared_preferences/shared_preferences.dart';
@@ -37,13 +38,28 @@ Widget openLab() => MaterialApp(
       ),
     );
 
+/// A signed-in session, because the app shows the login screen without one.
+///
+/// Set through the preference store rather than by poking the singleton, so
+/// these tests exercise the same restore path a real launch does.
+Future<void> signInForTest() async {
+  SharedPreferences.setMockInitialValues({
+    'session.username': 'tester',
+    'session.token': 'test-token',
+    'session.profile_id': 'test-profile',
+    'session.role': 'user',
+    'session.display_name': 'Tester',
+  });
+  await Session.instance.load();
+}
+
 void main() {
   // The Shell blocks on the first-run sheet, which would cover every screen
   // under test. These tests are about the screens, not about onboarding —
   // there is a dedicated group for that.
   setUp(() => Profile.instance.markLoadedForTest());
 
-  setUp(() => SharedPreferences.setMockInitialValues({}));
+  setUp(signInForTest);
 
   testWidgets('app boots to four flat destinations', (tester) async {
     await tester.pumpWidget(const AuraV5App());

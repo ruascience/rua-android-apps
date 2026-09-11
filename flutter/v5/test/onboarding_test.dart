@@ -1,4 +1,5 @@
 import 'package:flutter/material.dart';
+import 'package:aurav5/data/session.dart';
 import 'package:flutter_test/flutter_test.dart';
 import 'package:shared_preferences/shared_preferences.dart';
 import 'package:aurav5/data/profile.dart';
@@ -10,8 +11,24 @@ import 'package:aurav5/ui/onboarding.dart';
 /// 35 / 170 cm / 70 kg standing in silently. A wrong age does not throw, it
 /// produces a believable VO2max — the same failure mode this project keeps
 /// meeting on the protocol side.
+/// A signed-in session, because the app shows the login screen without one.
+///
+/// Set through the preference store rather than by poking the singleton, so
+/// these tests exercise the same restore path a real launch does.
+Future<void> signInForTest() async {
+  SharedPreferences.setMockInitialValues({
+    'session.username': 'tester',
+    'session.token': 'test-token',
+    'session.profile_id': 'test-profile',
+    'session.role': 'user',
+    'session.display_name': 'Tester',
+  });
+  await Session.instance.load();
+}
+
 void main() {
   setUp(() async {
+    await signInForTest();
     // Band identity still lives in SharedPreferences, and save() writes it —
     // without a mock the plugin channel throws and the sheet never closes.
     SharedPreferences.setMockInitialValues({});

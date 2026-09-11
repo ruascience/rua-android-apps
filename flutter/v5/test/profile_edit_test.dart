@@ -1,4 +1,5 @@
 import 'package:flutter/material.dart';
+import 'package:aurav5/data/session.dart';
 import 'package:flutter_test/flutter_test.dart';
 import 'package:shared_preferences/shared_preferences.dart';
 import 'package:aurav5/data/profile.dart';
@@ -26,8 +27,24 @@ Widget openEditor() => MaterialApp(
       ),
     );
 
+/// A signed-in session, because the app shows the login screen without one.
+///
+/// Set through the preference store rather than by poking the singleton, so
+/// these tests exercise the same restore path a real launch does.
+Future<void> signInForTest() async {
+  SharedPreferences.setMockInitialValues({
+    'session.username': 'tester',
+    'session.token': 'test-token',
+    'session.profile_id': 'test-profile',
+    'session.role': 'user',
+    'session.display_name': 'Tester',
+  });
+  await Session.instance.load();
+}
+
 void main() {
   setUp(() async {
+    await signInForTest();
     SharedPreferences.setMockInitialValues({});
     await Store.instance.resetForTest();
     Profile.instance.markLoadedForTest();

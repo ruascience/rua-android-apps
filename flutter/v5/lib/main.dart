@@ -9,8 +9,10 @@ import 'ui/device_page.dart';
 import 'ui/home_page.dart';
 import 'data/background.dart';
 import 'data/cloud_sync.dart';
+import 'data/session.dart';
 import 'data/sync_service.dart';
 import 'ui/kit.dart';
+import 'ui/login_page.dart';
 import 'ui/onboarding.dart';
 import 'ui/sleep_page.dart';
 import 'ui/trends_page.dart';
@@ -44,6 +46,11 @@ Future<void> main() async {
   // the user to clear it.
   //
   // Booting with defaults and saying so is strictly better than not booting.
+  // Before anything that talks to the server: the outbox authenticates as the
+  // signed-in person, and starting a flush before the session is restored
+  // would send a burst of unauthenticated requests on every launch.
+  await Session.instance.load();
+
   var storageFailed = false;
   try {
     await Profile.instance.load();
@@ -176,7 +183,12 @@ class AuraV5App extends StatelessWidget {
             // that could disagree with it.
             builder: (inner) {
               applyPaletteFor(Theme.of(inner).brightness);
-              return Shell(storageFailed: storageFailed);
+              return StreamBuilder<void>(
+                stream: Session.instance.changes,
+                builder: (context, _) => Session.instance.signedIn
+                    ? Shell(storageFailed: storageFailed)
+                    : const LoginPage(),
+              );
             },
           ),
         ),
