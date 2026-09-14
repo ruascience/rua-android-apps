@@ -22,6 +22,19 @@ class _HomePageState extends State<HomePage> {
   final link = BandLink.instance;
 
   List<Sample> hr = const [], spo2 = const [], hrv = const [], temp = const [];
+
+  /// The selected day's heart rate, and nothing before it.
+  ///
+  /// Separate from [hr] on purpose. [hr] is a 14-day window because resting
+  /// heart rate and recovery need a fortnight to say anything; the ribbon
+  /// draws ONE day against a fixed 24-hour axis. Feeding it the fortnight
+  /// drew fourteen days squeezed onto one day's axis, and the caption then
+  /// reported the fortnight's peak as if it had happened today — "peak
+  /// 110 bpm at 18:20" read at 12:48.
+  List<Sample> hrDay = const [];
+
+  /// Sleep actually recorded overlapping the selected day.
+  List<DateTimeRange> asleep = const [];
   double steps = 0, kcal = 0, km = 0, activeMin = 0;
   Estimate? resting, recoveryScore, strainScore;
   bool loading = true;
@@ -184,21 +197,31 @@ class _HomePageState extends State<HomePage> {
     final am =
         await Store.instance.read(dev, 'active_minutes', since: todayStart);
 
+    // Sleep for the shaded band. Read from the evening BEFORE the day: a
+    // night that starts at 23:40 belongs to the day it ends on as much as
+    // the one it began on, and clipping happens in the painter.
+    final segs = await Store.instance.readSleepSegments(dev,
+        since: _dayStart.subtract(const Duration(days: 1)));
+
     // Everything is read from `since` forward, so the selected day's window
     // has to be closed at its own end rather than running to now.
     List<Sample> upToDay(List<Sample> xs) =>
         xs.where((s) => s.at.isBefore(_dayEnd)).toList();
     final rest = restingHeartRate(upToDay(h));
-    final hrToday = h
-        .where((s) => s.at.isAfter(todayStart) && s.at.isBefore(_dayEnd))
-        .toList();
     List<Sample> onDay(List<Sample> xs) => xs
         .where((s) => !s.at.isBefore(todayStart) && s.at.isBefore(_dayEnd))
+        .toList();
+    final hrToday = onDay(h);
+    final nights = segs
+        .where((g) => g.end.isAfter(_dayStart) && g.start.isBefore(_dayEnd))
+        .map((g) => DateTimeRange(start: g.start, end: g.end))
         .toList();
 
     if (!mounted) return;
     setState(() {
       hr = upToDay(h);
+      hrDay = hrToday;
+      asleep = nights;
       spo2 = upToDay(o);
       hrv = upToDay(v);
       temp = upToDay(t);
@@ -320,12 +343,13 @@ class _HomePageState extends State<HomePage> {
               // reduced to a latest-value tile with a sparkline beside it.
               Row(mainAxisAlignment: MainAxisAlignment.spaceBetween, children: [
                 const Lab('Heart rate · this day'),
-                if (hr.isNotEmpty)
-                  Lab('${hr.last.value.round()} bpm at '
-                      '${DateFormat.Hm().format(hr.last.at)}', color: kBad),
+                if (hrDay.isNotEmpty)
+                  Lab('${hrDay.last.value.round()} bpm at '
+                      '${DateFormat.Hm().format(hrDay.last.at)}', color: kBad),
               ]),
               const SizedBox(height: 6),
-              DayRibbon(samples: hr, day: _day, colour: kBad),
+              DayRibbon(
+                  samples: hrDay, day: _day, colour: kBad, asleep: asleep),
               const SizedBox(height: 6),
               Basis(_ribbonCaption()),
               const SizedBox(height: 18),
@@ -380,13 +404,21 @@ class _HomePageState extends State<HomePage> {
   /// What the trace shows beyond its own shape: when the peak was, and that
   /// the shaded band is sleep rather than an axis decoration.
   String _ribbonCaption() {
-    if (hr.isEmpty) return 'No heart rate recorded for this day.';
-    var peak = hr.first;
-    for (final s in hr) {
+    if (hrDay.isEmpty) {
+      // The fortnight may still hold readings; say which is empty, because
+      // "no data" on a day the band was worn is a different problem from a
+      // band that has never synced.
+      return hr.isEmpty
+          ? 'No heart rate recorded.'
+          : 'No heart rate recorded on this day.';
+    }
+    var peak = hrDay.first;
+    for (final s in hrDay) {
       if (s.value > peak.value) peak = s;
     }
-    return 'Shaded — asleep. Peak ${peak.value.round()} bpm at '
-        '${DateFormat.Hm().format(peak.at)}.';
+    final shading = asleep.isEmpty ? '' : 'Shaded — asleep. ';
+    return '$shading${hrDay.length} readings. Peak ${peak.value.round()} bpm '
+        'at ${DateFormat.Hm().format(peak.at)}.';
   }
 
   /// A derived figure and the sentence it carries.

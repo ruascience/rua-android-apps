@@ -831,20 +831,30 @@ class Figure extends StatelessWidget {
 /// arrangement of tiles can, and it makes two days comparable at a glance
 /// because the axis never moves.
 class DayRibbon extends StatelessWidget {
+  /// The samples for THIS day only.
+  ///
+  /// The axis is a fixed 24 hours, so anything outside the day is drawn at
+  /// one edge or the other — a fortnight of readings all pile up on 00:00
+  /// and the trace becomes a vertical smear that still looks like a day.
   final List<Sample> samples;
   final DateTime day;
   final Color colour;
 
-  /// Hours shaded as "asleep". Empty draws no band.
-  final int sleepFromHour, sleepToHour;
+  /// Spans actually recorded as sleep, shaded behind the trace.
+  ///
+  /// Measured, not assumed: this was a fixed 00:00-07:00 band, which the
+  /// caption then described as "asleep". Somebody who slept from 01:30 to
+  /// 09:00 got a shaded band that was wrong at both ends and asserted as
+  /// fact. Empty shades nothing, which is the honest answer when the band
+  /// recorded no sleep.
+  final List<DateTimeRange> asleep;
 
   const DayRibbon({
     super.key,
     required this.samples,
     required this.day,
     required this.colour,
-    this.sleepFromHour = 0,
-    this.sleepToHour = 7,
+    this.asleep = const [],
   });
 
   @override
@@ -867,8 +877,7 @@ class DayRibbon extends StatelessWidget {
                 colour: colour,
                 rule: kRule.withValues(alpha: 0.65),
                 night: kCardAlt,
-                sleepFromHour: sleepFromHour,
-                sleepToHour: sleepToHour,
+                asleep: asleep,
               ),
             ),
           ),
@@ -896,7 +905,7 @@ class _RibbonPainter extends CustomPainter {
   final List<Sample> samples;
   final DateTime start;
   final Color colour, rule, night;
-  final int sleepFromHour, sleepToHour;
+  final List<DateTimeRange> asleep;
 
   _RibbonPainter({
     required this.samples,
@@ -904,17 +913,23 @@ class _RibbonPainter extends CustomPainter {
     required this.colour,
     required this.rule,
     required this.night,
-    required this.sleepFromHour,
-    required this.sleepToHour,
+    required this.asleep,
   });
 
   @override
   void paint(Canvas canvas, Size size) {
-    // The night band first, so the trace sits on top of it.
-    if (sleepToHour > sleepFromHour) {
-      final x0 = size.width * (sleepFromHour / 24);
-      final x1 = size.width * (sleepToHour / 24);
-      canvas.drawRect(Rect.fromLTRB(x0, 0, x1, size.height), Paint()..color = night);
+    // The night bands first, so the trace sits on top of them. Each span is
+    // clipped to the day: a night that began yesterday evening shows only the
+    // part of itself that belongs on this axis.
+    final shade = Paint()..color = night;
+    final end = start.add(const Duration(days: 1));
+    for (final r in asleep) {
+      final from = r.start.isBefore(start) ? start : r.start;
+      final to = r.end.isAfter(end) ? end : r.end;
+      if (!to.isAfter(from)) continue;
+      final x0 = size.width * (from.difference(start).inSeconds / 86400.0);
+      final x1 = size.width * (to.difference(start).inSeconds / 86400.0);
+      canvas.drawRect(Rect.fromLTRB(x0, 0, x1, size.height), shade);
     }
 
     final grid = Paint()
@@ -966,7 +981,7 @@ class _RibbonPainter extends CustomPainter {
 
   @override
   bool shouldRepaint(_RibbonPainter old) =>
-      old.samples != samples || old.colour != colour;
+      old.samples != samples || old.colour != colour || old.asleep != asleep;
 }
 
 /// One measure against the goal set for it.
@@ -1022,28 +1037,56 @@ class GoalBar extends StatelessWidget {
 }
 
 /// Cells divided by hairlines, sharing the page's ground.
+///
+/// Rows size to their tallest cell. This was a `GridView.count` with a fixed
+/// `childAspectRatio`, which gave every cell the same height whatever it held
+/// — and the cells hold a figure plus the sentence saying where the figure
+/// came from ("lowest sustained 25 s during 00:00-06:00"). That sentence is
+/// the difference between a reading and a claim, and a fixed cell height cut
+/// it off mid-line. The basis is not the part to truncate.
 class RuleGrid extends StatelessWidget {
   final List<Widget> children;
   final int columns;
   const RuleGrid({super.key, required this.children, this.columns = 3});
 
   @override
-  Widget build(BuildContext context) => Container(
-        decoration: BoxDecoration(
-          color: kRule,
-          border: Border.symmetric(horizontal: BorderSide(color: kRule)),
-        ),
-        child: GridView.count(
-          crossAxisCount: columns,
-          shrinkWrap: true,
-          physics: const NeverScrollableScrollPhysics(),
-          mainAxisSpacing: 1,
-          crossAxisSpacing: 1,
-          childAspectRatio: 1.15,
-          children: [
-            for (final c in children)
-              Container(color: kBg, padding: const EdgeInsets.all(12), child: c),
-          ],
-        ),
-      );
+  Widget build(BuildContext context) {
+    final rows = <List<Widget>>[];
+    for (var i = 0; i < children.length; i += columns) {
+      final end = i + columns;
+      rows.add(children.sublist(i, end > children.length ? children.length : end));
+    }
+    return Container(
+      decoration: BoxDecoration(
+        color: kRule,
+        border: Border.symmetric(horizontal: BorderSide(color: kRule)),
+      ),
+      child: Column(children: [
+        for (var r = 0; r < rows.length; r++) ...[
+          if (r > 0) Container(height: 1, color: kRule),
+          IntrinsicHeight(
+            child: Row(
+              crossAxisAlignment: CrossAxisAlignment.stretch,
+              children: [
+                for (var c = 0; c < columns; c++) ...[
+                  if (c > 0) Container(width: 1, color: kRule),
+                  Expanded(
+                    child: Container(
+                      color: kBg,
+                      padding: const EdgeInsets.all(12),
+                      // A short last row keeps its empty cells so the columns
+                      // stay the same width as the rows above.
+                      child: c < rows[r].length
+                          ? rows[r][c]
+                          : const SizedBox.shrink(),
+                    ),
+                  ),
+                ],
+              ],
+            ),
+          ),
+        ],
+      ]),
+    );
+  }
 }

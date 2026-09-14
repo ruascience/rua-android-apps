@@ -808,7 +808,8 @@ class BandLink {
     // the missing segment silently shortened the night by two hours.
     final missing = _missingIndices(out, opcode);
     if (missing.isNotEmpty && retryOnGap) {
-      _log('${j.opName(opcode)}: missing index/indices $missing — re-pulling');
+      _log('${j.opName(opcode)}: missing index/indices '
+          '${_asRanges(missing)} — re-pulling');
       final again = await pullHistory(opcode,
           mode: mode, cursor: cursor, idle: idle, limit: limit,
           retryOnGap: false);
@@ -820,9 +821,10 @@ class BandLink {
         }
         final merged = byIndex.keys.toList()..sort();
         final result = [for (final i in merged) byIndex[i]!];
+        final stillMissing = _missingIndices(result, opcode);
         _log('${j.opName(opcode)}: ${result.length} record(s) after merge'
-            '${_missingIndices(result, opcode).isEmpty ? "" : ", still missing "
-                "${_missingIndices(result, opcode)}"}');
+            '${stillMissing.isEmpty ? "" : ", still missing "
+                "${_asRanges(stillMissing)}"}');
         return result;
       }
     }
@@ -842,6 +844,22 @@ class BandLink {
   /// A numeric heuristic does not save you here — those two pseudo-indices
   /// were ADJACENT, so any span test passes them. The only sound rule is
   /// whether the layout has an index at all.
+  /// The widest run of absent indices still treated as lost records.
+  ///
+  /// Indices are 16-bit (`rec[1] | rec[2] << 8`), so one corrupted record
+  /// reads as index 40,000 in a pull of nine — and every number in between
+  /// then counted as missing. That produced a re-pull that could not possibly
+  /// help, and an activity-log line tens of thousands of integers long, which
+  /// pushed every real line off the card.
+  static const _maxGapSpan = 512;
+
+  @visibleForTesting
+  List<int> missingIndicesForTest(List<Uint8List> records, int opcode) =>
+      _missingIndices(records, opcode);
+
+  @visibleForTesting
+  static String rangesForTest(List<int> xs) => _asRanges(xs);
+
   List<int> _missingIndices(List<Uint8List> records, int opcode) {
     if (!j.recordHasIndex(opcode)) return const [];
     final idx = records
@@ -851,10 +869,42 @@ class BandLink {
         .toList()
       ..sort();
     if (idx.length < 2) return const [];
-    return [
-      for (var i = idx.first; i <= idx.last; i++)
-        if (!idx.contains(i)) i
-    ];
+    final out = <int>[];
+    for (var k = 1; k < idx.length; k++) {
+      final gap = idx[k] - idx[k - 1] - 1;
+      if (gap <= 0) continue;
+      // Not a hole in a sequence — a number that was never part of one.
+      if (gap > _maxGapSpan) continue;
+      for (var i = idx[k - 1] + 1; i < idx[k]; i++) {
+        out.add(i);
+      }
+    }
+    return out;
+  }
+
+  /// Indices as runs: `12-19, 44, 51-53`, truncated after a few.
+  ///
+  /// The log is read on a phone, one line per entry. A bare `List<int>` of a
+  /// hundred consecutive numbers says exactly what `3-102` says, at a
+  /// hundredth of the width.
+  static String _asRanges(List<int> xs, {int maxRuns = 6}) {
+    if (xs.isEmpty) return '';
+    final runs = <String>[];
+    var from = xs.first, prev = xs.first;
+    void close() =>
+        runs.add(from == prev ? '$from' : '$from-$prev');
+    for (final x in xs.skip(1)) {
+      if (x == prev + 1) {
+        prev = x;
+        continue;
+      }
+      close();
+      from = prev = x;
+    }
+    close();
+    if (runs.length <= maxRuns) return runs.join(', ');
+    return '${runs.take(maxRuns).join(', ')} '
+        '(+${runs.length - maxRuns} more, ${xs.length} total)';
   }
 
   /// Ask the band what it actually is.
