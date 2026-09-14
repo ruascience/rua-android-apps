@@ -44,7 +44,32 @@ case "$DN" in
   *"Android Debug"*) echo "refusing to distribute a debug-signed build"; exit 1 ;;
 esac
 
-firebase appdistribution:distribute "$APK" \
-  --app "$APP_ID" \
-  --groups "$GROUPS" \
-  --release-notes "$NOTES"
+# Retried, because the distribute step races the upload it depends on.
+#
+# Firebase creates the release, then calls `releases/<id>:distribute` on it —
+# and that second call has twice now answered 404 "Requested entity was not
+# found" for a release the first call had just created successfully. Running
+# the identical command again works: the binary is recognised as one already
+# uploaded and only the distribution is retried.
+#
+# Without this the script reports failure on a release that IS in the console,
+# which reads as "the build did not go out" when the build did go out and
+# simply reached nobody.
+for attempt in 1 2 3; do
+  if firebase appdistribution:distribute "$APK" \
+      --app "$APP_ID" \
+      --groups "$GROUPS" \
+      --release-notes "$NOTES"; then
+    echo "distributed to '$GROUPS' on attempt $attempt"
+    exit 0
+  fi
+  echo "distribute attempt $attempt failed; the upload itself may well have"
+  echo "succeeded — retrying in 10s"
+  sleep 10
+done
+
+echo
+echo "Distribution failed three times. Check whether the binary is already in"
+echo "the console before rebuilding: the upload and the distribute are two"
+echo "calls, and only the second one tends to fail."
+exit 1
