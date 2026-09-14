@@ -26,6 +26,7 @@
 library;
 
 import 'package:flutter/material.dart';
+import 'package:intl/intl.dart';
 
 import '../data/profile.dart';
 import '../data/store.dart';
@@ -1146,4 +1147,134 @@ class RuleGrid extends StatelessWidget {
       ]),
     );
   }
+}
+
+/// One series of spot readings for a [DotPlot].
+class DotSeries {
+  final String label;
+  final List<Sample> samples;
+  final Color colour;
+  const DotSeries(this.label, this.samples, this.colour);
+}
+
+/// Spot readings as one mark per reading, at the time it happened.
+///
+/// Not a line chart. SpO2, skin temperature, HRV and the inferred blood
+/// pressure arrive a handful of times a day; joining four marks across a
+/// fortnight draws a trend the sensor never observed, and the line is the
+/// most confident-looking thing on the screen. Marks leave the gaps visible
+/// as gaps, which is the honest shape of a signal that is sampled rather
+/// than watched.
+///
+/// The shaded band behind each series is that person's own usual range —
+/// the middle of their readings — because a wrist optical sensor's absolute
+/// values carry real bias and the only defensible "normal" is their own.
+class DotPlot extends StatelessWidget {
+  final List<DotSeries> series;
+  final DateTime from, to;
+  final double height;
+  const DotPlot({
+    super.key,
+    required this.series,
+    required this.from,
+    required this.to,
+    this.height = 110,
+  });
+
+  @override
+  Widget build(BuildContext context) {
+    final n = series.fold<int>(0, (a, s) => a + s.samples.length);
+    return Column(crossAxisAlignment: CrossAxisAlignment.stretch, children: [
+      Container(
+        decoration:
+            BoxDecoration(color: kCard, border: Border.all(color: kRule)),
+        padding: const EdgeInsets.fromLTRB(8, 10, 8, 6),
+        child: SizedBox(
+          height: height,
+          child: n == 0
+              ? Center(
+                  child: Text('no readings in this window',
+                      style: TextStyle(
+                          fontFamily: kMono, fontSize: 10, color: kMuted)))
+              : CustomPaint(
+                  painter: _DotPainter(
+                    series: series,
+                    from: from,
+                    to: to,
+                    rule: kRule.withValues(alpha: 0.65),
+                  ),
+                ),
+        ),
+      ),
+      const SizedBox(height: 4),
+      Row(mainAxisAlignment: MainAxisAlignment.spaceBetween, children: [
+        Lab(DateFormat.MMMd().format(from)),
+        Lab(DateFormat.MMMd().format(to)),
+      ]),
+    ]);
+  }
+}
+
+class _DotPainter extends CustomPainter {
+  final List<DotSeries> series;
+  final DateTime from, to;
+  final Color rule;
+  _DotPainter({
+    required this.series,
+    required this.from,
+    required this.to,
+    required this.rule,
+  });
+
+  @override
+  void paint(Canvas canvas, Size size) {
+    final grid = Paint()
+      ..color = rule
+      ..strokeWidth = 1;
+    for (var i = 1; i < 4; i++) {
+      final y = size.height * i / 4;
+      canvas.drawLine(Offset(0, y), Offset(size.width, y), grid);
+    }
+
+    final all = [for (final s in series) ...s.samples.map((e) => e.value)];
+    if (all.isEmpty) return;
+    var lo = all.reduce((a, b) => a < b ? a : b);
+    var hi = all.reduce((a, b) => a > b ? a : b);
+    if (hi - lo < 1) {
+      lo -= 1;
+      hi += 1;
+    }
+    final pad = (hi - lo) * 0.15;
+    lo -= pad;
+    hi += pad;
+
+    final span = to.difference(from).inSeconds;
+    if (span <= 0) return;
+    double xFor(DateTime t) =>
+        size.width * (t.difference(from).inSeconds / span).clamp(0.0, 1.0);
+    double yFor(double v) => size.height - ((v - lo) / (hi - lo)) * size.height;
+
+    for (final s in series) {
+      if (s.samples.isEmpty) continue;
+      // The wearer's own usual range: the middle half of their readings.
+      // Two readings cannot establish a range, so none is drawn.
+      if (s.samples.length >= 4) {
+        final sorted = s.samples.map((e) => e.value).toList()..sort();
+        final q1 = sorted[(sorted.length * 0.25).floor()];
+        final q3 = sorted[(sorted.length * 0.75).floor()];
+        canvas.drawRect(
+          Rect.fromLTRB(0, yFor(q3), size.width, yFor(q1)),
+          Paint()..color = s.colour.withValues(alpha: 0.10),
+        );
+      }
+      final dot = Paint()..color = s.colour;
+      for (final e in s.samples) {
+        canvas.drawCircle(Offset(xFor(e.at), yFor(e.value)), 2.2, dot);
+      }
+    }
+  }
+
+  @override
+  bool shouldRepaint(_DotPainter old) =>
+      old.series != series || old.from != from || old.to != to;
 }

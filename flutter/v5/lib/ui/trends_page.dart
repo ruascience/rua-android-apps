@@ -1,5 +1,6 @@
 import 'package:flutter/material.dart';
 
+import 'experimental_page.dart';
 import 'history_page.dart';
 import 'insights_page.dart';
 import 'kit.dart';
@@ -24,6 +25,12 @@ class TrendsPage extends StatelessWidget {
           Divider(height: 1, color: kRule),
           const SizedBox(height: 20),
           const InsightsSection(),
+          const SizedBox(height: 24),
+          Divider(height: 1, color: kRule),
+          // Last, and collapsed. Blood pressure from a wrist optical band is
+          // not a blood-pressure measurement; putting it anywhere above this
+          // would give it the visual weight of one.
+          const ExperimentalSection(),
         ],
       );
 }

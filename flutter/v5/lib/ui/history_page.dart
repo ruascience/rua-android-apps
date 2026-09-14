@@ -9,7 +9,14 @@ import 'package:intl/intl.dart';
 import '../ble/band_link.dart';
 import '../data/store.dart';
 
-const _metrics = ['heart_rate', 'temperature', 'spo2', 'hrv', 'stress'];
+/// Stress is deliberately not here.
+///
+/// The band derives it from heart-rate variability — it is not a second
+/// measurement. As a sibling chip beside HRV it invited exactly the mistake
+/// it looks like it supports: reading one, then "confirming" it with the
+/// other, when both are the same number seen twice. It appears as a sentence
+/// on the HRV selection instead, which is what it is.
+const _metrics = ['heart_rate', 'temperature', 'spo2', 'hrv'];
 
 const _labels = {
   'heart_rate': 'Heart rate (bpm)',
@@ -34,6 +41,8 @@ class _HistorySectionState extends State<HistorySection> {
   String _metric = 'heart_rate';
   int _days = 7;
   List<Sample> _data = const [];
+  /// The band's stress score over the same window, shown only under HRV.
+  List<Sample> _stress = const [];
   bool _loading = false;
   bool _truncated = false;
 
@@ -76,9 +85,13 @@ class _HistorySectionState extends State<HistorySection> {
     final d = await Store.instance.read(dev, _metric, since: since);
     final cut =
         await Store.instance.wasTruncated(dev, _metric, since: since);
+    final st = _metric == 'hrv'
+        ? await Store.instance.read(dev, 'stress', since: since)
+        : const <Sample>[];
     if (mounted) {
       setState(() {
         _data = d;
+        _stress = st;
         _truncated = cut;
         _loading = false;
         _loadedFor = dev;
@@ -143,9 +156,33 @@ class _HistorySectionState extends State<HistorySection> {
           _stats(t),
           const SizedBox(height: 16),
           SizedBox(height: 260, child: _chart(t)),
+          if (_metric == 'hrv') ...[
+            const SizedBox(height: 10),
+            Basis(_stressNote()),
+          ],
         ],
       ],
     );
+  }
+
+  /// Stress, said plainly and attributed to the number above it.
+  String _stressNote() {
+    if (_stress.isEmpty) {
+      return 'The band also reports a stress score. It is derived from this '
+          'same HRV signal rather than measured separately. None recorded in '
+          'this window.';
+    }
+    final v = _stress.last.value.round();
+    // The band's own scale, 0-100. Described rather than graded: a score from
+    // a derived number does not deserve a verdict.
+    final word = v < 30
+        ? 'HRV high for you, which the band reads as relaxed'
+        : v < 60
+            ? 'HRV mid-range for you'
+            : 'HRV low for you, which the band reads as strained';
+    return 'Stress $v/100 — $word. Derived from this same HRV signal, not a '
+        'separate measurement, so it cannot corroborate the chart above. '
+        '${_stress.length} scores in this window.';
   }
 
   Widget _empty(ThemeData t) => Padding(
