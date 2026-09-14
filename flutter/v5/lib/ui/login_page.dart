@@ -2,6 +2,7 @@ import 'package:flutter/material.dart';
 
 import '../data/cloud_sync.dart';
 import '../data/session.dart';
+import 'register_page.dart';
 import 'kit.dart';
 
 /// Sign in. The app shows nothing else until this succeeds.
@@ -29,6 +30,29 @@ class _LoginPageState extends State<LoginPage> {
   bool _showPass = false;
   bool _showServer = false;
   String? _error;
+
+  /// What this server allows by way of self sign-up.
+  ///
+  /// Asked rather than assumed. A "Create an account" button that always
+  /// leads to "sign-up is switched off" is worse than no button, and the same
+  /// build has to work against a server that allows it and one that does not.
+  /// Null while the answer is still outstanding, which is why nothing about
+  /// sign-up is drawn until it arrives.
+  RegistrationPolicy? _policy;
+
+  @override
+  void initState() {
+    super.initState();
+    _askPolicy();
+  }
+
+  Future<void> _askPolicy() async {
+    final p = await Session.registrationPolicy(
+      baseUrl: CloudSync.instance.baseUrl,
+      client: CloudSync.pinnedClient(),
+    );
+    if (mounted) setState(() => _policy = p);
+  }
 
   @override
   void dispose() {
@@ -178,12 +202,45 @@ class _LoginPageState extends State<LoginPage> {
                     ],
 
                     const SizedBox(height: 24),
-                    Text(
-                      'Accounts are created by the study team. If you do not '
-                      'have one, ask them rather than signing up — there is no '
-                      'sign-up.',
-                      style: t.textTheme.labelSmall?.copyWith(color: kMuted),
-                    ),
+                    if (_policy?.available == true) ...[
+                      Center(
+                        child: TextButton(
+                          onPressed: _busy
+                              ? null
+                              : () async {
+                                  final made =
+                                      await Navigator.of(context).push<bool>(
+                                    MaterialPageRoute(
+                                      builder: (_) =>
+                                          RegisterPage(policy: _policy!),
+                                    ),
+                                  );
+                                  // Nothing to do on success: registering
+                                  // signs you in, and the session gate above
+                                  // this screen swaps it for the app.
+                                  if (made == true && mounted) setState(() {});
+                                },
+                          child: const Text('Create an account'),
+                        ),
+                      ),
+                      const SizedBox(height: 6),
+                      Text(
+                        'You will need the join code the study team gave you '
+                        'with your band.',
+                        style: t.textTheme.labelSmall?.copyWith(color: kMuted),
+                      ),
+                    ] else
+                      Text(
+                        // Only once the server has actually said so. Before
+                        // the answer arrives this would be a claim the app
+                        // has not checked.
+                        _policy == null
+                            ? 'Checking whether this server allows sign-up…'
+                            : (_policy!.reason ??
+                                'Accounts are created by the study team. If '
+                                'you do not have one, ask them.'),
+                        style: t.textTheme.labelSmall?.copyWith(color: kMuted),
+                      ),
                   ],
                 ),
               ),

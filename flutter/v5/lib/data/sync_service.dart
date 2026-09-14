@@ -11,6 +11,7 @@ import 'dart:async';
 
 import '../ble/band_link.dart';
 import '../protocol/jstyle.dart' as j;
+import 'collecting.dart';
 import 'store.dart';
 
 class SyncService {
@@ -67,6 +68,23 @@ class SyncService {
 
   Future<void> syncAll() async {
     if (_busy || !_link.connected) return;
+
+    // Nothing may be read off a band until we know whose it is.
+    //
+    // Uploads were already blocked in this state; local writes were not, so a
+    // sync wrote rows stamped with no owner at all — attributable to nobody,
+    // and indistinguishable afterwards from a participant's own rows. Found
+    // on the phone: an admin signed in, no participant chosen, and the
+    // auto-sync on connect quietly pulled 1,604 rows anyway.
+    //
+    // The band keeps its history; nothing is lost by waiting.
+    if (Collecting.instance.blocked) {
+      _link.log.add('sync skipped — choose who you are collecting for first; '
+          'the band keeps its history until then');
+      lastError = 'Choose who you are collecting for on the Band tab.';
+      _changes.add(null);
+      return;
+    }
     _busy = true;
     storedThisRun = 0;
     lastError = '';

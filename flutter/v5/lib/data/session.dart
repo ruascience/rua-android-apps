@@ -23,6 +23,18 @@ import 'collecting.dart';
 /// device. The keystore would be better and is a native dependency this build
 /// has not taken on; the token's 90-day expiry and revocability are what carry
 /// the risk in the meantime.
+/// What this server allows by way of self sign-up.
+class RegistrationPolicy {
+  final bool available;
+  final bool codeRequired;
+  final String? reason;
+  const RegistrationPolicy({
+    required this.available,
+    this.codeRequired = true,
+    this.reason,
+  });
+}
+
 class Session {
   Session._();
   static final Session instance = Session._();
@@ -105,6 +117,92 @@ class Session {
     profileId = body['profileId'] as String?;
     role = body['role'] as String?;
     displayName = body['displayName'] as String?;
+    await _persist();
+    _changes.add(null);
+    return null;
+  }
+
+  /// What the server allows by way of self sign-up.
+  ///
+  /// Asked before the sign-up link is drawn. A "Create an account" button
+  /// that always leads to "sign-up is switched off" is worse than no button,
+  /// and the phone cannot know the server's policy without asking. A server
+  /// too old to answer simply has no sign-up, which is what it had before.
+  static Future<RegistrationPolicy> registrationPolicy({
+    required String baseUrl,
+    required http.Client client,
+  }) async {
+    try {
+      final res = await client
+          .get(Uri.parse('$baseUrl/api/v1/auth/registration'))
+          .timeout(const Duration(seconds: 10));
+      if (res.statusCode < 200 || res.statusCode >= 300) {
+        return const RegistrationPolicy(available: false);
+      }
+      final b = jsonDecode(res.body);
+      if (b is! Map) return const RegistrationPolicy(available: false);
+      return RegistrationPolicy(
+        available: b['available'] == true,
+        codeRequired: b['codeRequired'] == true,
+        reason: b['reason'] as String?,
+      );
+    } catch (_) {
+      return const RegistrationPolicy(available: false);
+    }
+  }
+
+  /// Create an account and sign in with it. Null on success, else a message.
+  Future<String?> register({
+    required String baseUrl,
+    required String username,
+    required String password,
+    required String displayName,
+    required String joinCode,
+    required http.Client client,
+    String device = 'Android',
+  }) async {
+    final http.Response res;
+    try {
+      res = await client
+          .post(
+            Uri.parse('$baseUrl/api/v1/auth/register'),
+            headers: const {'Content-Type': 'application/json'},
+            body: jsonEncode({
+              'username': username.trim(),
+              'password': password,
+              'displayName': displayName.trim(),
+              'joinCode': joinCode.trim(),
+              'device': device,
+            }),
+          )
+          .timeout(const Duration(seconds: 20));
+    } catch (e) {
+      return 'Could not reach the server. Check the address on the sign-in '
+          'screen.';
+    }
+
+    if (res.statusCode < 200 || res.statusCode >= 300) {
+      // The server's own words: it distinguishes a wrong join code from a
+      // taken username from sign-up being off, and each of those is something
+      // different for the person to do next.
+      try {
+        final b = jsonDecode(res.body);
+        if (b is Map && b['message'] is String) return b['message'] as String;
+      } catch (_) {}
+      return 'Could not create the account (${res.statusCode}).';
+    }
+
+    final body = jsonDecode(res.body);
+    if (body is! Map || body['token'] is! String) {
+      return 'The account was created but the server did not sign you in. '
+          'Try signing in.';
+    }
+    this.username = body['username'] as String? ?? username.trim();
+    token = body['token'] as String;
+    profileId = body['profileId'] as String?;
+    role = body['role'] as String?;
+    // `this.`: the parameter of the same name shadows the field here.
+    this.displayName = body['displayName'] as String?;
     await _persist();
     _changes.add(null);
     return null;

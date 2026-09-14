@@ -26,16 +26,21 @@ void main() {
     expect(find.text('Band'), findsNothing);
   });
 
-  testWidgets('there is no way to sign up from the app', (tester) async {
+  testWidgets('sign-up is not offered until the server says it is allowed',
+      (tester) async {
+    // Self sign-up exists now — a participant should not wait on an admin to
+    // be let in. But whether THIS server allows it is the server's answer,
+    // not the build's, and until it arrives the app must not offer a button
+    // that would only lead to a refusal. No server is reachable in a test, so
+    // this is also what an offline or older server looks like.
     SharedPreferences.setMockInitialValues({});
     await Session.instance.load();
     await tester.pumpWidget(const AuraV5App());
     await tester.pump();
 
-    // Accounts are created by the study team. An open sign-up on a public
-    // endpoint is an invitation to fill the database with strangers, and the
-    // screen says so rather than leaving someone hunting for a button.
-    expect(find.textContaining('there is no sign-up'), findsOneWidget);
+    expect(find.text('Create an account'), findsNothing);
+    expect(find.textContaining('Accounts are created by the study team'),
+        findsOneWidget);
   });
 
   testWidgets('a restored session goes straight to the app', (tester) async {
