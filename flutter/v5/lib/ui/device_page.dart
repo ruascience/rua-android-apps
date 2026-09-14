@@ -976,10 +976,19 @@ class _DevicePageState extends State<DevicePage> {
           _detailsCard(t),
           const SizedBox(height: 12),
           if (link.connected) ..._connected(t) else ..._disconnected(t),
-          if (showAdvancedCards) ...[
-            const SizedBox(height: 12),
-            _monitorCard(t),
-          ],
+          // NOT behind showAdvancedCards any more.
+          //
+          // This is the setting that decides whether the band records
+          // anything optically while it is away from a phone — which is the
+          // whole point of handing one to somebody for a fortnight. A sensor
+          // that was never enabled here logs nothing, and its history then
+          // reads empty in a way indistinguishable from a band that lacks
+          // the hardware. That confusion has already cost this project once:
+          // HRV was recorded as unsupported on a band that was sampling it
+          // hourly. Hiding the one control that prevents a wasted collection
+          // is not a simplification.
+          const SizedBox(height: 12),
+          _monitorCard(t),
           const SizedBox(height: 12),
           _logCard(t),
         ],

@@ -41,6 +41,13 @@ class SyncService {
   /// single slow opcode is being pulled.
   int storedThisRun = 0;
 
+  /// How far the band's own calendar is from this phone's, in days.
+  ///
+  /// Null until a sync has read the daily totals. Non-zero means every
+  /// reading pulled off this band is stamped with a date that is wrong by
+  /// that much — see where it is computed for why nothing corrects it.
+  int? clockDriftDays;
+
   /// The last failure, if the run ended in one. Cleared when a run starts.
   String lastError = '';
 
@@ -82,6 +89,32 @@ class SyncService {
           for (final d in days) Sample(d.day, d.active.inMinutes.toDouble())
         ]);
         _link.log.add('stored ${days.length} day(s) of activity');
+
+        // The band's clock, checked against the phone's.
+        //
+        // Nothing ever sets the band's clock — `set_time` (0x01) exists in
+        // the opcode table and this app has never sent it — so every record
+        // is stamped by whatever the band believes the date is. A band whose
+        // clock was wrong, or which reset after a flat battery, produces a
+        // complete and plausible dataset filed under the wrong dates, and
+        // the record parser accepts any well-formed date. That is invisible
+        // on a 14-day view: the readings simply are not there.
+        //
+        // 0x51 writes one record per day, so the newest one IS the band's
+        // idea of today. Free, and read-only.
+        final newest = days.map((d) => d.day).reduce((a, b) => a.isAfter(b) ? a : b);
+        final today = DateTime.now();
+        final drift = DateTime(today.year, today.month, today.day)
+            .difference(DateTime(newest.year, newest.month, newest.day))
+            .inDays;
+        clockDriftDays = drift;
+        if (drift.abs() > 1) {
+          _link.log.add('⚠ band clock looks wrong: its newest day is '
+              '${newest.year}-${newest.month.toString().padLeft(2, '0')}-'
+              '${newest.day.toString().padLeft(2, '0')}, '
+              '${drift > 0 ? '$drift day(s) behind' : '${-drift} day(s) ahead of'} '
+              'this phone — stored readings will carry those dates');
+        }
       } else {
         // Said out loud. An empty 0x51 pull used to log nothing at all, and
         // the Today screen then drew "Steps 0 / 10,000" — which reads as a
