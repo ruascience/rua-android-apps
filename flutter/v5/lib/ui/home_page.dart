@@ -6,6 +6,7 @@ import 'package:intl/intl.dart';
 import '../analytics/metrics.dart';
 import '../ble/band_link.dart';
 import '../protocol/findings.dart' as fd;
+import '../data/collecting.dart';
 import '../data/profile.dart';
 import '../data/store.dart';
 import 'kit.dart';
@@ -363,6 +364,16 @@ class _HomePageState extends State<HomePage> {
 
               // The three derived figures, each printing the sentence the
               // analytics already computed about where it came from.
+              //
+              // Withheld entirely while collecting for somebody else. Every
+              // one of them reads age, sex and weight out of the profile
+              // stored ON THIS PHONE — the operator's body, not the
+              // participant's. Recovery, strain and VO2max computed from the
+              // wrong person's weight are not approximations, they are
+              // fiction, and they would look exactly like measurements.
+              if (Collecting.instance.active)
+                _collectingNotice(t)
+              else
               RuleGrid(children: [
                 _derived('Recovery', recoveryScore,
                     empty: 'needs 4+ nights of HRV'),
@@ -406,6 +417,33 @@ class _HomePageState extends State<HomePage> {
             ),
           ]),
         ),
+      );
+
+  /// Why the derived figures are missing, said plainly.
+  ///
+  /// An empty space where three numbers used to be reads as a fault. This is
+  /// not a fault: it is the app declining to compute somebody's recovery
+  /// score from a stranger's body.
+  Widget _collectingNotice(ThemeData t) => Container(
+        decoration: BoxDecoration(
+          color: kAccent.withValues(alpha: 0.08),
+          border: Border.all(color: kAccent.withValues(alpha: 0.35)),
+        ),
+        padding: const EdgeInsets.all(12),
+        child: Column(crossAxisAlignment: CrossAxisAlignment.start, children: [
+          Text('Recovery, strain and resting heart rate are not shown',
+              style: t.textTheme.titleSmall?.copyWith(color: kText)),
+          const SizedBox(height: 6),
+          Text(
+            'This phone is collecting for '
+            '${Collecting.instance.displayName ?? 'a participant'}. Those '
+            'three figures are computed from the age, sex and weight stored '
+            'here, which are yours — not theirs. The readings above are '
+            'measurements and are shown; these would be arithmetic on the '
+            'wrong body.',
+            style: t.textTheme.bodySmall?.copyWith(color: kMuted, height: 1.4),
+          ),
+        ]),
       );
 
   /// What the trace shows beyond its own shape: when the peak was, and that

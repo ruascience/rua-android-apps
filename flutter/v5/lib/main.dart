@@ -9,6 +9,7 @@ import 'ui/device_page.dart';
 import 'ui/home_page.dart';
 import 'data/background.dart';
 import 'data/cloud_sync.dart';
+import 'data/collecting.dart';
 import 'data/session.dart';
 import 'data/sync_service.dart';
 import 'ui/kit.dart';
@@ -50,6 +51,7 @@ Future<void> main() async {
   // signed-in person, and starting a flush before the session is restored
   // would send a burst of unauthenticated requests on every launch.
   await Session.instance.load();
+  await Collecting.instance.load();
 
   var storageFailed = false;
   try {
@@ -264,6 +266,10 @@ class _ShellState extends State<Shell> {
           body: SafeArea(
             child: Column(children: [
               if (widget.storageFailed) const _StorageWarning(),
+              // Above the connection bar, not below it: which person the
+              // readings are being filed under outranks which band they are
+              // coming from.
+              const CollectingBanner(),
               // Deliberately not const — see ConnectionBar.build.
               ConnectionBar(),
               Expanded(
@@ -284,6 +290,49 @@ class _ShellState extends State<Shell> {
             },
           ),
         ),
+      );
+}
+
+/// Who the readings on this phone are being filed under.
+///
+/// Pinned above every tab, for the same reason the connection bar is and one
+/// more: this is the one piece of state where being wrong is silent. A band
+/// synced under the wrong person produces a complete, plausible dataset that
+/// nothing afterwards can tell apart from the real thing, so the answer has
+/// to be visible on every screen rather than on the one you would only visit
+/// if you already suspected something.
+class CollectingBanner extends StatelessWidget {
+  const CollectingBanner({super.key});
+
+  @override
+  Widget build(BuildContext context) => StreamBuilder<void>(
+        stream: Collecting.instance.changes,
+        builder: (context, _) {
+          final c = Collecting.instance;
+          if (!c.active && !c.blocked) return const SizedBox.shrink();
+          final warn = c.blocked;
+          return Container(
+            width: double.infinity,
+            color: (warn ? kWarn : kAccent).withValues(alpha: 0.16),
+            padding: const EdgeInsets.symmetric(horizontal: 16, vertical: 7),
+            child: Row(children: [
+              Icon(warn ? Icons.error_outline : Icons.assignment_ind_outlined,
+                  size: 15, color: warn ? kWarn : kAccent),
+              const SizedBox(width: 8),
+              Expanded(
+                child: Text(
+                  warn
+                      ? 'No participant chosen — readings cannot be filed'
+                      : 'Collecting for ${c.displayName}',
+                  style: TextStyle(
+                      fontFamily: kMono,
+                      fontSize: 11,
+                      color: warn ? kWarn : kAccent),
+                ),
+              ),
+            ]),
+          );
+        },
       );
 }
 

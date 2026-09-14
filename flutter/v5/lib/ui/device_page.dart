@@ -10,6 +10,7 @@ import '../ble/band_link.dart';
 import '../data/profile.dart';
 import '../data/background.dart';
 import '../data/cloud_sync.dart';
+import '../data/collecting.dart';
 import '../data/session.dart';
 import '../data/store.dart';
 import '../data/sync_service.dart';
@@ -661,6 +662,161 @@ class _DevicePageState extends State<DevicePage> {
   /// one control whose absence is a privacy problem: a phone handed to the
   /// next participant with the last one still signed in would file their
   /// readings under the wrong person, and nothing downstream could tell.
+  /// Who this phone is collecting for. Admin accounts only.
+  ///
+  /// The whole point of the mode, and the reason it is a CARD rather than a
+  /// setting buried somewhere: a band that was worn by somebody else for a
+  /// fortnight is synced on whichever phone is to hand, and if this says the
+  /// wrong name the entire collection is filed under the wrong person with
+  /// nothing afterwards to show it happened.
+  Widget _collectingCard(ThemeData t) => StreamBuilder<void>(
+        stream: Collecting.instance.changes,
+        builder: (context, _) {
+          if (!Session.instance.isAdmin) return const SizedBox.shrink();
+          final c = Collecting.instance;
+          final blocked = c.blocked;
+          return Card(
+            color: blocked
+                ? kWarn.withValues(alpha: 0.10)
+                : (c.active ? kAccent.withValues(alpha: 0.10) : null),
+            child: Padding(
+              padding: const EdgeInsets.all(16),
+              child: Column(
+                crossAxisAlignment: CrossAxisAlignment.start,
+                children: [
+                  Row(children: [
+                    Icon(blocked ? Icons.error_outline : Icons.assignment_ind_outlined,
+                        size: 18, color: blocked ? kWarn : kAccent),
+                    const SizedBox(width: 8),
+                    Expanded(
+                      child: Text('Collecting for',
+                          style: t.textTheme.titleMedium),
+                    ),
+                  ]),
+                  const SizedBox(height: 6),
+                  Text(
+                    c.active
+                        ? 'Everything this phone reads from a band is filed '
+                            'under ${c.displayName ?? 'this participant'}, '
+                            'not under you. Your own details are not pushed '
+                            'while this is set.'
+                        : 'You are signed in as an admin, which has no '
+                            'readings of its own. Choose the participant '
+                            'whose band you are about to sync — the server '
+                            'will not accept readings until you do.',
+                    style: t.textTheme.bodySmall?.copyWith(
+                        color: blocked ? kWarn : kMuted, height: 1.4),
+                  ),
+                  const SizedBox(height: 12),
+                  Row(children: [
+                    Expanded(
+                      child: Text(
+                        c.displayName ?? 'nobody selected',
+                        style: t.textTheme.titleLarge?.copyWith(
+                            color: c.active ? kText : kMuted),
+                      ),
+                    ),
+                    if (c.active)
+                      TextButton(
+                        onPressed: _collectBusy ? null : _clearCollecting,
+                        child: const Text('Clear'),
+                      ),
+                    const SizedBox(width: 4),
+                    FilledButton.tonal(
+                      onPressed: _collectBusy ? null : _pickParticipant,
+                      child: Text(c.active ? 'Change' : 'Choose'),
+                    ),
+                  ]),
+                  if (_collectBusy) ...[
+                    const SizedBox(height: 10),
+                    const LinearProgressIndicator(),
+                  ],
+                  if (_collectError.isNotEmpty) ...[
+                    const SizedBox(height: 10),
+                    Text(_collectError,
+                        style: t.textTheme.bodySmall?.copyWith(color: kBad)),
+                  ],
+                ],
+              ),
+            ),
+          );
+        },
+      );
+
+  bool _collectBusy = false;
+  String _collectError = '';
+
+  Future<void> _clearCollecting() async {
+    // Any rows already written keep the owner they were stamped with; this
+    // only changes where the NEXT ones go. That is the whole reason the
+    // stamp lives on the row.
+    await Collecting.instance.clear();
+    if (mounted) setState(() {});
+  }
+
+  Future<void> _pickParticipant() async {
+    setState(() {
+      _collectBusy = true;
+      _collectError = '';
+    });
+    List<Participant> people;
+    try {
+      people = await CloudSync.instance.listParticipants();
+    } catch (e) {
+      if (!mounted) return;
+      setState(() {
+        _collectBusy = false;
+        _collectError = '$e';
+      });
+      return;
+    }
+    if (!mounted) return;
+    setState(() => _collectBusy = false);
+
+    final chosen = await showModalBottomSheet<Participant>(
+      context: context,
+      showDragHandle: true,
+      builder: (ctx) => SafeArea(
+        child: ListView(
+          shrinkWrap: true,
+          children: [
+            Padding(
+              padding: const EdgeInsets.fromLTRB(16, 4, 16, 12),
+              child: Text('Whose band are you syncing?',
+                  style: Theme.of(ctx).textTheme.titleMedium),
+            ),
+            for (final p in people)
+              ListTile(
+                enabled: !p.disabled,
+                leading: Icon(p.role == 'admin'
+                    ? Icons.admin_panel_settings_outlined
+                    : Icons.person_outline),
+                title: Text(p.label),
+                // The username, because two people can share a display name
+                // and the id is what actually gets stamped on every row.
+                subtitle: Text(
+                    p.disabled ? '${p.username} · disabled' : p.username),
+                onTap: () => Navigator.of(ctx).pop(p),
+              ),
+            if (people.isEmpty)
+              const Padding(
+                padding: EdgeInsets.all(16),
+                child: Text('No accounts to collect for.'),
+              ),
+          ],
+        ),
+      ),
+    );
+    if (chosen == null || !mounted) return;
+    await Collecting.instance.select(chosen.profileId,
+        displayName: chosen.label);
+    if (!mounted) return;
+    setState(() {});
+    // Anything that was queued while blocked can go now, under the person
+    // just chosen.
+    unawaited(CloudSync.instance.flush());
+  }
+
   Widget _accountCard(ThemeData t) => StreamBuilder<void>(
         stream: Session.instance.changes,
         builder: (context, _) {
@@ -1148,6 +1304,7 @@ class _DevicePageState extends State<DevicePage> {
         const SizedBox(height: 12),
         _backgroundCard(t),
         const SizedBox(height: 12),
+        _collectingCard(t),
         _accountCard(t),
         const SizedBox(height: 12),
         _cloudCard(t),
@@ -1222,6 +1379,7 @@ class _DevicePageState extends State<DevicePage> {
         const SizedBox(height: 12),
         _toolsCard(t),
         const SizedBox(height: 12),
+        _collectingCard(t),
         _accountCard(t),
         const SizedBox(height: 12),
         _cloudCard(t),

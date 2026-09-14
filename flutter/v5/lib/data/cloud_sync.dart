@@ -37,12 +37,28 @@ import 'package:http/http.dart' as http;
 import 'package:http/io_client.dart';
 import 'package:shared_preferences/shared_preferences.dart';
 
+import 'collecting.dart';
 import 'profile.dart';
 import 'session.dart';
 import 'store.dart';
 import 'uuid.dart';
 
 enum CloudState { idle, syncing, offline, error }
+
+/// Somebody an admin can collect on behalf of.
+class Participant {
+  final String profileId, username, displayName, role;
+  final bool disabled;
+  const Participant({
+    required this.profileId,
+    required this.username,
+    required this.displayName,
+    required this.role,
+    required this.disabled,
+  });
+
+  String get label => displayName.trim().isNotEmpty ? displayName.trim() : username;
+}
 
 class CloudSync {
   CloudSync._();
@@ -327,6 +343,26 @@ jyhn7zPAyvS/SaEpVHhuQqTEmCXhVlF8U9P2gm2e1crp5ZG/BTwi/MpzI3cSOGlL
   /// marks them done, and both are fine — the queue IS the data.
   Future<void> flush() async {
     if (!enabled || _running) return;
+
+    // An admin must say who it is collecting for before anything goes up.
+    //
+    // The server refuses an admin that does not name a profile — correctly:
+    // filing an admin's upload under a blank owner is how records end up
+    // belonging to nobody. But that refusal arrives one 403 per batch, and a
+    // drain that is being refused looks identical to one that is working.
+    // Stop here instead, with the reason, and keep the rows queued: nothing
+    // is lost, and the moment a participant is chosen they all go up under
+    // the right person.
+    if (Collecting.instance.blocked) {
+      state = CloudState.error;
+      lastError = 'Choose who you are collecting for on the Band tab — '
+          'an admin account has to name the participant before readings '
+          'can be filed. Nothing is lost; they are queued.';
+      await refreshPending();
+      _emit();
+      return;
+    }
+
     _running = true;
     _rejectedThisRun = false;
     _profileRejectedThisRun = false;
@@ -365,6 +401,13 @@ jyhn7zPAyvS/SaEpVHhuQqTEmCXhVlF8U9P2gm2e1crp5ZG/BTwi/MpzI3cSOGlL
               'metric': r['metric'],
               'at': r['at'],
               'value': (r['value'] as num?)?.toDouble() ?? 0.0,
+              // Sent only when the row actually carries one. An ordinary
+              // participant's rows are NULL here and the server files them
+              // under the authenticated account, exactly as before — a
+              // client that names its own owner is refused unless it is an
+              // admin, which is the rule that makes this safe to send at all.
+              if ((r['owner'] as String?)?.isNotEmpty ?? false)
+                'owner': r['owner'],
             }
         ]);
         if (!ok) return; // stays queued; state already set by _post
@@ -408,6 +451,8 @@ jyhn7zPAyvS/SaEpVHhuQqTEmCXhVlF8U9P2gm2e1crp5ZG/BTwi/MpzI3cSOGlL
                   .map((e) => int.tryParse(e.trim()))
                   .whereType<int>()
                   .toList(),
+              if ((r['owner'] as String?)?.isNotEmpty ?? false)
+                'owner': r['owner'],
             }
         ]);
         if (!ok) return;
@@ -458,6 +503,20 @@ jyhn7zPAyvS/SaEpVHhuQqTEmCXhVlF8U9P2gm2e1crp5ZG/BTwi/MpzI3cSOGlL
     final p = Profile.instance;
     final device = p.bandDisplayName;
     if (device == null || device.isEmpty || !p.onboarded) return;
+
+    // ⚠ Never while collecting for somebody else.
+    //
+    // This pushes the details held ON THIS PHONE — the operator's name, age,
+    // sex, height and weight. In collect mode the readings are filed under
+    // the participant, so pushing the profile too would overwrite THEIR
+    // details with the admin's, and the server's derived metrics would then
+    // be computed from the wrong body. The participant's profile belongs to
+    // the participant; a collection terminal has no business editing it.
+    if (Collecting.instance.active) {
+      _profileNote = 'collecting for ${Collecting.instance.displayName ?? 'a '
+          'participant'} — this phone\'s profile is not being pushed';
+      return;
+    }
 
     // ⚠ The id is settled BEFORE anything is sent, and no id means no push.
     //
@@ -595,6 +654,42 @@ jyhn7zPAyvS/SaEpVHhuQqTEmCXhVlF8U9P2gm2e1crp5ZG/BTwi/MpzI3cSOGlL
       _resetClient();
       return false;
     }
+  }
+
+  /// The people this admin can collect for.
+  ///
+  /// Read from `/accounts` rather than `/profiles`: a participant who has been
+  /// enrolled but has never synced a band has an account and no profile
+  /// DOCUMENT, and those are exactly the people you are about to hand a band
+  /// to. Listing only profiles would offer you everyone except them.
+  ///
+  /// Admin-only on the server, so an ordinary participant simply gets a 403
+  /// and never sees the picker.
+  Future<List<Participant>> listParticipants() async {
+    final res = await _client
+        .get(Uri.parse('$baseUrl/api/v1/accounts'), headers: _authHeaders)
+        .timeout(const Duration(seconds: 15));
+    if (res.statusCode == 401 || res.statusCode == 403) {
+      throw StateError('This account is not allowed to list participants.');
+    }
+    if (res.statusCode < 200 || res.statusCode >= 300) {
+      throw StateError('The server answered ${res.statusCode}.');
+    }
+    final body = jsonDecode(res.body);
+    if (body is! List) throw StateError('The server answered unexpectedly.');
+    return [
+      for (final e in body)
+        if (e is Map &&
+            e['profileId'] is String &&
+            (e['profileId'] as String).isNotEmpty)
+          Participant(
+            profileId: e['profileId'] as String,
+            username: e['username'] as String? ?? '',
+            displayName: e['displayName'] as String? ?? '',
+            role: e['role'] as String? ?? 'user',
+            disabled: e['disabled'] == true,
+          )
+    ];
   }
 
   static String? _blankToNull(String s) => s.trim().isEmpty ? null : s.trim();

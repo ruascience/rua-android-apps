@@ -5,6 +5,8 @@ import 'package:flutter/foundation.dart';
 import 'package:http/http.dart' as http;
 import 'package:shared_preferences/shared_preferences.dart';
 
+import 'collecting.dart';
+
 /// Who is signed in on this phone.
 ///
 /// The app used to authenticate as ITSELF: one credential compiled into every
@@ -115,6 +117,12 @@ class Session {
   /// person cannot work around — they are handing the phone to someone else.
   Future<void> signOut({String? baseUrl, http.Client? client}) async {
     final t = token;
+    // Forget who this phone was collecting for, before anything else.
+    //
+    // A selection that survived a sign-out would stamp the NEXT person's
+    // readings with a stranger's profile id — and they would have no reason
+    // to look, because they never chose it.
+    await Collecting.instance.clear();
     username = null;
     token = null;
     profileId = null;

@@ -12,6 +12,7 @@ import 'dart:io';
 import 'package:path/path.dart' as p;
 
 import '../protocol/jstyle.dart' as j;
+import 'collecting.dart';
 // sqflite_ffi re-exports the sqflite API and adds the desktop factory.
 import 'package:flutter/foundation.dart';
 import 'package:sqflite_common_ffi/sqflite_ffi.dart';
@@ -56,7 +57,7 @@ class Store {
     databaseFactory = databaseFactoryFfi;
     await _db?.close();
     _db = await databaseFactory.openDatabase(inMemoryDatabasePath,
-        options: OpenDatabaseOptions(version: 5, onCreate: _create));
+        options: OpenDatabaseOptions(version: 6, onCreate: _create));
     revision = 0;
   }
 
@@ -72,7 +73,7 @@ class Store {
     return databaseFactory.openDatabase(
       path,
       options: OpenDatabaseOptions(
-        version: 5,
+        version: 6,
         onUpgrade: (d, from, to) async {
           // Each step is additive and idempotent: existing sample data is
           // never rewritten, so an upgrade cannot lose a month of history.
@@ -89,6 +90,11 @@ class Store {
           // 55,779 samples and a profile that took a first-run sheet to
           // collect.
           if (from < 5) await _addProfileIdentityColumns(d);
+          // v6 records WHO each reading belongs to. Additive and nullable:
+          // NULL is the honest value for every existing row, and it means
+          // exactly what it has always meant — the person signed in on this
+          // phone. Nothing is rewritten.
+          if (from < 6) await _addOwnerColumn(d);
         },
         onCreate: _create,
       ),
@@ -128,6 +134,7 @@ class Store {
           await _createProfile(d);
           await _addSyncColumns(d);
           await _addProfileIdentityColumns(d);
+          await _addOwnerColumn(d);
           }
 
   /// Add the cloud-sync bookkeeping.
@@ -158,6 +165,31 @@ class Store {
       // Index is an optimisation, never a correctness requirement.
     }
   }
+
+  /// v6: who each reading belongs to.
+  ///
+  /// Nullable, with no default, and that is the whole design. NULL means "the
+  /// person signed in on this phone" — true of every row written before this
+  /// column existed and of every row an ordinary participant will ever write.
+  /// A non-null value is a deliberate answer given by an admin collecting on
+  /// someone else's behalf.
+  ///
+  /// On the ROW rather than resolved at upload time. Rows queue in the outbox
+  /// for as long as the phone is offline; deciding ownership when they drain
+  /// would hand a backlog to whoever happened to be selected by then. Whose
+  /// wrist a reading came off is a fact about the reading.
+  static Future<void> _addOwnerColumn(Database d) async {
+    for (final t in ['samples', 'sleep_segments']) {
+      try {
+        await d.execute('ALTER TABLE $t ADD COLUMN owner TEXT');
+      } catch (_) {
+        // Already present.
+      }
+    }
+  }
+
+  @visibleForTesting
+  static Future<void> upgradeOwnerForTest(Database d) => _addOwnerColumn(d);
 
   /// v5: who the profile IS, as distinct from what it says.
   ///
@@ -372,8 +404,10 @@ class Store {
     _bump();
   }
 
+  /// Sleep, stamped the same way and for the same reason as [putSamples].
   Future<void> putSleepSegments(
-      String device, Iterable<j.SleepSegment> segs) async {
+      String device, Iterable<j.SleepSegment> segs, {String? owner}) async {
+    final who = owner ?? Collecting.instance.profileId;
     final d = await db;
     final batch = d.batch();
     for (final s in segs) {
@@ -384,6 +418,7 @@ class Store {
           'start': s.start.toUtc().millisecondsSinceEpoch,
           'minutes': s.minutes,
           'stages': s.stages.join(','),
+          'owner': who,
         },
         conflictAlgorithm: ConflictAlgorithm.replace,
       );
@@ -421,8 +456,17 @@ class Store {
     }).toList();
   }
 
-  Future<void> putSamples(
-      String device, String metric, Iterable<Sample> samples) async {
+  /// Write readings, stamped with whoever this phone is collecting for.
+  ///
+  /// The owner is read from [Collecting] here rather than passed down from
+  /// each caller on purpose. There are several write paths — a history pull,
+  /// an on-demand measurement, the periodic sampler — and a single one that
+  /// forgot to pass it would file a participant's readings under the admin
+  /// with nothing to show it had happened. One place that cannot be
+  /// forgotten beats six that can. [owner] overrides it, for tests.
+  Future<void> putSamples(String device, String metric, Iterable<Sample> samples,
+      {String? owner}) async {
+    final who = owner ?? Collecting.instance.profileId;
     final d = await db;
     final batch = d.batch();
     for (final s in samples) {
@@ -433,6 +477,7 @@ class Store {
           'metric': metric,
           'at': s.at.toUtc().millisecondsSinceEpoch,
           'value': s.value,
+          'owner': who,
         },
         conflictAlgorithm: ConflictAlgorithm.replace,
       );
