@@ -519,6 +519,17 @@ jyhn7zPAyvS/SaEpVHhuQqTEmCXhVlF8U9P2gm2e1crp5ZG/BTwi/MpzI3cSOGlL
               // never reaches the server.
               'phoneNumber': _blankToNull(p.phoneNumber),
               'email': _blankToNull(p.email),
+              // Where this wearer's day starts.
+              //
+              // The server rolls readings up per day and has no other way to
+              // know: on a UTC boundary an Indian participant's day would be
+              // cut at 05:30 local and a night's sleep filed under two dates.
+              //
+              // The offset, because Dart reports one and does not report the
+              // IANA zone name. It is exact wherever DST does not apply,
+              // which includes India, and the server prefers a named zone
+              // when it has one — so this is a floor, not a ceiling.
+              'zoneOffsetMinutes': DateTime.now().timeZoneOffset.inMinutes,
               'periodStarts': [
                 for (final d in p.periodStarts)
                   '${d.year.toString().padLeft(4, '0')}-'
