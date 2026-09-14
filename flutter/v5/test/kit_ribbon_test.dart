@@ -33,6 +33,34 @@ void main() {
     expect(find.byType(DayRibbon), findsOneWidget);
   });
 
+  testWidgets('a day with long gaps does not bridge them', (t) async {
+    // Two clusters six hours apart. A point-to-point polyline drew a straight
+    // line across the gap — six hours of heart rate that was never measured,
+    // rendered as the most confident-looking part of the chart.
+    final day = DateTime(2026, 9, 14);
+    final samples = [
+      for (var i = 0; i < 40; i++)
+        Sample(day.add(Duration(hours: 7, seconds: i * 20)),
+            62 + (i % 7).toDouble()),
+      for (var i = 0; i < 40; i++)
+        Sample(day.add(Duration(hours: 13, seconds: i * 20)),
+            88 + (i % 11).toDouble()),
+    ];
+    await t.pumpWidget(host(DayRibbon(
+      samples: samples, day: day, colour: Colors.red)));
+    expect(t.takeException(), isNull);
+  });
+
+  testWidgets('a single reading in the day is still drawn', (t) async {
+    final day = DateTime(2026, 9, 14);
+    await t.pumpWidget(host(DayRibbon(
+      samples: [Sample(day.add(const Duration(hours: 9)), 71)],
+      day: day,
+      colour: Colors.red,
+    )));
+    expect(t.takeException(), isNull);
+  });
+
   testWidgets('an empty day still paints its axis', (t) async {
     await t.pumpWidget(host(DayRibbon(
       samples: const [],

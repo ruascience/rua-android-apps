@@ -940,7 +940,9 @@ class _RibbonPainter extends CustomPainter {
       canvas.drawLine(Offset(0, y), Offset(size.width, y), grid);
     }
 
-    if (samples.length < 2) return;
+    // Not `length < 2`. One reading is a measurement and has to appear: the
+    // isolated-bucket dot below is exactly what draws it.
+    if (samples.isEmpty) return;
 
     final vals = samples.map((s) => s.value).toList();
     var lo = vals.reduce((a, b) => a < b ? a : b);
@@ -960,23 +962,78 @@ class _RibbonPainter extends CustomPainter {
     double yFor(double v) =>
         size.height - ((v - lo) / (hi - lo)) * size.height;
 
-    final path = Path()..moveTo(xFor(samples.first.at), yFor(samples.first.value));
-    for (final s in samples.skip(1)) {
-      path.lineTo(xFor(s.at), yFor(s.value));
+    // Bucketed, not point-to-point.
+    //
+    // The band does not sample evenly: a history pull lands as bursts seconds
+    // apart, so a polyline through every reading drew 637 readings from a
+    // 90-minute window as a solid vertical smear a few pixels wide — sensor
+    // noise rendered at full amplitude, and unreadable. Each bucket now draws
+    // the RANGE it actually held, with the median line over it. The spread is
+    // information; the zig-zag between consecutive readings was not.
+    const bucketMinutes = 5;
+    const buckets = 24 * 60 ~/ bucketMinutes;
+    final loOf = List<double?>.filled(buckets, null);
+    final hiOf = List<double?>.filled(buckets, null);
+    final inBucket = List.generate(buckets, (_) => <double>[]);
+    for (final smp in samples) {
+      final mins = smp.at.difference(start).inMinutes;
+      if (mins < 0 || mins >= 24 * 60) continue;
+      final b = mins ~/ bucketMinutes;
+      final v = smp.value;
+      loOf[b] = loOf[b] == null || v < loOf[b]! ? v : loOf[b];
+      hiOf[b] = hiOf[b] == null || v > hiOf[b]! ? v : hiOf[b];
+      inBucket[b].add(v);
     }
-    canvas.drawPath(
-        path,
-        Paint()
-          ..style = PaintingStyle.stroke
-          ..strokeWidth = 1.6
-          ..strokeJoin = StrokeJoin.round
-          ..strokeCap = StrokeCap.round
-          ..color = colour);
+
+    double xOfBucket(int b) => size.width * ((b + 0.5) / buckets);
+
+    // The range behind, the median in front.
+    final spread = Paint()
+      ..style = PaintingStyle.stroke
+      ..strokeWidth = (size.width / buckets).clamp(1.0, 3.0)
+      ..strokeCap = StrokeCap.round
+      ..color = colour.withValues(alpha: 0.32);
+    for (var b = 0; b < buckets; b++) {
+      if (loOf[b] == null) continue;
+      final x = xOfBucket(b);
+      canvas.drawLine(
+          Offset(x, yFor(hiOf[b]!)), Offset(x, yFor(loOf[b]!)), spread);
+    }
+
+    // A median line that BREAKS across gaps. Connecting a reading at 08:00 to
+    // the next one at 14:00 draws six hours of heart rate that was never
+    // measured, and it is the most confident-looking part of the chart.
+    const maxBridge = 4; // buckets — 20 minutes
+    final line = Paint()
+      ..style = PaintingStyle.stroke
+      ..strokeWidth = 1.6
+      ..strokeJoin = StrokeJoin.round
+      ..strokeCap = StrokeCap.round
+      ..color = colour;
+    final path = Path();
+    int? prev;
+    for (var b = 0; b < buckets; b++) {
+      final vs = inBucket[b];
+      if (vs.isEmpty) continue;
+      vs.sort();
+      final median = vs[vs.length ~/ 2];
+      final pt = Offset(xOfBucket(b), yFor(median));
+      if (prev == null || b - prev > maxBridge) {
+        path.moveTo(pt.dx, pt.dy);
+        // A lone bucket with nothing to join draws no stroke at all, so mark
+        // it: an isolated reading is still a reading.
+        canvas.drawCircle(pt, 1.4, line);
+      } else {
+        path.lineTo(pt.dx, pt.dy);
+      }
+      prev = b;
+    }
+    canvas.drawPath(path, line);
 
     // The latest reading, marked where it happened rather than at the edge.
     final last = samples.last;
-    final lx = xFor(last.at), ly = yFor(last.value);
-    canvas.drawCircle(Offset(lx, ly), 3, Paint()..color = colour);
+    canvas.drawCircle(
+        Offset(xFor(last.at), yFor(last.value)), 3, Paint()..color = colour);
   }
 
   @override

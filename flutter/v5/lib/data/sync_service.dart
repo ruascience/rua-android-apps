@@ -82,6 +82,11 @@ class SyncService {
           for (final d in days) Sample(d.day, d.active.inMinutes.toDouble())
         ]);
         _link.log.add('stored ${days.length} day(s) of activity');
+      } else {
+        // Said out loud. An empty 0x51 pull used to log nothing at all, and
+        // the Today screen then drew "Steps 0 / 10,000" — which reads as a
+        // sedentary day rather than as a day with no record.
+        _link.log.add('daily activity: band returned no records');
       }
 
     final historyOps =

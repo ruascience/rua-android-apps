@@ -35,7 +35,14 @@ class _HomePageState extends State<HomePage> {
 
   /// Sleep actually recorded overlapping the selected day.
   List<DateTimeRange> asleep = const [];
-  double steps = 0, kcal = 0, km = 0, activeMin = 0;
+  /// Daily totals, or null when the band has no record for this day.
+  ///
+  /// Nullable on purpose. These were `double` defaulting to 0, so a day the
+  /// band never reported and a day it reported as genuinely zero drew the
+  /// identical "Steps 0 / 10,000" — an unsynced day reading as a sedentary
+  /// one. The band stores one 0x51 record per day and syncs them in a batch;
+  /// a missing record is common and is not a measurement of zero.
+  double? steps, kcal, km, activeMin;
   Estimate? resting, recoveryScore, strainScore;
   bool loading = true;
 
@@ -226,10 +233,10 @@ class _HomePageState extends State<HomePage> {
       hrv = upToDay(v);
       temp = upToDay(t);
       final stD = onDay(st), caD = onDay(ca), diD = onDay(di), amD = onDay(am);
-      steps = stD.isEmpty ? 0 : stD.last.value;
-      kcal = caD.isEmpty ? 0 : caD.last.value;
-      km = diD.isEmpty ? 0 : diD.last.value;
-      activeMin = amD.isEmpty ? 0 : amD.last.value;
+      steps = stD.isEmpty ? null : stD.last.value;
+      kcal = caD.isEmpty ? null : caD.last.value;
+      km = diD.isEmpty ? null : diD.last.value;
+      activeMin = amD.isEmpty ? null : amD.last.value;
       resting = rest;
       recoveryScore =
           recovery(hrvHistory: upToDay(v), hrHistory: upToDay(h));
@@ -417,8 +424,9 @@ class _HomePageState extends State<HomePage> {
       if (s.value > peak.value) peak = s;
     }
     final shading = asleep.isEmpty ? '' : 'Shaded — asleep. ';
-    return '$shading${hrDay.length} readings. Peak ${peak.value.round()} bpm '
-        'at ${DateFormat.Hm().format(peak.at)}.';
+    return '$shading${hrDay.length} readings, drawn as the 5-minute range '
+        'with its median. Peak ${peak.value.round()} bpm at '
+        '${DateFormat.Hm().format(peak.at)}.';
   }
 
   /// A derived figure and the sentence it carries.
@@ -445,39 +453,54 @@ class _HomePageState extends State<HomePage> {
   Widget _activityBars() {
     final g = Profile.instance.goals;
     final u = Units.of(Profile.instance);
+
+    // An em dash, not a zero. The bar sits empty either way; the difference
+    // is whether the app is claiming the day was sedentary.
+    String shown(double? v, String Function(double) fmt) =>
+        v == null ? '—' : fmt(v);
+    double part(double? v, num goal) =>
+        (v == null || goal == 0) ? 0 : v / goal;
+
     return Column(children: [
       GoalBar(
         label: 'Steps',
-        value: NumberFormat.decimalPattern().format(steps.round()),
+        value: shown(steps, (v) => NumberFormat.decimalPattern().format(v.round())),
         goal: '/ ${NumberFormat.decimalPattern().format(g.steps)}',
-        fraction: g.steps == 0 ? 0 : steps / g.steps,
+        fraction: part(steps, g.steps),
         colour: kAccent,
       ),
       const SizedBox(height: 11),
       GoalBar(
         label: 'Calories',
-        value: kcal.toStringAsFixed(0),
+        value: shown(kcal, (v) => v.toStringAsFixed(0)),
         goal: '/ ${g.kcal}',
-        fraction: g.kcal == 0 ? 0 : kcal / g.kcal,
+        fraction: part(kcal, g.kcal),
         colour: kGreen,
       ),
       const SizedBox(height: 11),
       GoalBar(
         label: 'Distance',
-        value: u.distanceValue(km),
+        value: shown(km, u.distanceValue),
         goal: '/ ${u.distance(g.km)}',
-        fraction: g.km == 0 ? 0 : km / g.km,
+        fraction: part(km, g.km),
         colour: kWarn,
       ),
-      if (activeMin > 0) ...[
+      if ((activeMin ?? 0) > 0) ...[
         const SizedBox(height: 11),
         GoalBar(
           label: 'Active',
-          value: '${activeMin.round()}',
+          value: '${activeMin!.round()}',
           goal: '/ ${g.activeMinutes} min',
-          fraction: g.activeMinutes == 0 ? 0 : activeMin / g.activeMinutes,
+          fraction: part(activeMin, g.activeMinutes),
           colour: kAccent2,
         ),
+      ],
+      if (steps == null && kcal == null && km == null) ...[
+        const SizedBox(height: 8),
+        Basis(_isToday
+            ? 'no activity record synced yet today — the band stores one '
+                'per day; sync from the Band tab'
+            : 'no activity record for this day'),
       ],
     ]);
   }
