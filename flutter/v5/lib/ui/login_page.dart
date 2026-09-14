@@ -1,5 +1,4 @@
 import 'package:flutter/material.dart';
-import 'package:http/http.dart' as http;
 
 import '../data/cloud_sync.dart';
 import '../data/session.dart';
@@ -55,7 +54,9 @@ class _LoginPageState extends State<LoginPage> {
       baseUrl: CloudSync.instance.baseUrl,
       username: _user.text,
       password: _pass.text,
-      client: http.Client(),
+      // The pinned client: the server's certificate is self-signed, and a
+      // default client refuses it before the request is even sent.
+      client: CloudSync.pinnedClient(),
     );
 
     if (!mounted) return;

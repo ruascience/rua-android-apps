@@ -114,6 +114,16 @@ jyhn7zPAyvS/SaEpVHhuQqTEmCXhVlF8U9P2gm2e1crp5ZG/BTwi/MpzI3cSOGlL
 
   http.Client _client = _newClient();
 
+  /// A client that trusts the pinned certificate, for anything outside this
+  /// class that has to reach the same server.
+  ///
+  /// Login needs it and was built with a plain `http.Client()`, which does not
+  /// trust a self-signed certificate — so signing in failed the TLS handshake
+  /// and reported "could not reach the server", which is true and useless. The
+  /// pinned client is not an implementation detail of syncing; it is how this
+  /// app talks to this server at all.
+  static http.Client pinnedClient() => _newClient();
+
   /// A client that trusts the pinned certificate and nothing else.
   ///
   /// Two layers on purpose. `setTrustedCertificatesBytes` with

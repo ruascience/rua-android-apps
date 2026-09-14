@@ -9,8 +9,6 @@ import 'package:intl/intl.dart';
 import '../ble/band_link.dart';
 import '../data/profile.dart';
 import '../data/background.dart';
-import 'package:http/http.dart' as http;
-
 import '../data/cloud_sync.dart';
 import '../data/session.dart';
 import '../data/store.dart';
@@ -703,7 +701,7 @@ class _DevicePageState extends State<DevicePage> {
                   );
                   if (go == true) {
                     await Session.instance.signOut(
-                        baseUrl: cloud.baseUrl, client: http.Client());
+                        baseUrl: cloud.baseUrl, client: CloudSync.pinnedClient());
                   }
                 },
                 child: const Text('Sign out'),
