@@ -126,6 +126,51 @@ void main() {
       expect(byTime[t10], 'p-bbb');
     });
 
+    test('re-reading a band does NOT re-attribute rows to whoever is now set',
+        () async {
+      // The failure this prevents, observed on the live database: a
+      // participant's band was synced by an admin collecting for her and
+      // correctly stamped. The next day the same phone, signed in as its own
+      // user with no participant chosen, reconnected to that band and
+      // re-read its history. Every row was re-stamped to nobody and
+      // re-uploaded under the operator — 17,423 of her readings landed in
+      // his profile.
+      await Collecting.instance.select('p-abirami', displayName: 'Abirami');
+      await Store.instance.putSamples('JCV5 BE8D18', 'heart_rate',
+          [Sample(DateTime(2026, 9, 14, 9), 61)]);
+      expect((await rows()).single['owner'], 'p-abirami');
+      await Store.instance.markSamplesSynced(await rows());
+
+      // Now nobody is selected, and the same history is pulled again.
+      await Collecting.instance.clear();
+      await Store.instance.putSamples('JCV5 BE8D18', 'heart_rate',
+          [Sample(DateTime(2026, 9, 14, 9), 61)]);
+
+      final all = await Store.instance.unsyncedSamples();
+      expect(all, isEmpty,
+          reason: 'an unchanged re-read must not re-queue the row');
+
+      final d = await Store.instance.db;
+      final stored = await d.query('samples');
+      expect(stored.single['owner'], 'p-abirami',
+          reason: 'ownership is decided when a reading is first stored and '
+              'never changes; a re-read cannot hand it to someone else');
+    });
+
+    test('a genuinely new reading still gets the current owner', () async {
+      await Collecting.instance.select('p-abirami', displayName: 'Abirami');
+      await Store.instance.putSamples('JCV5 BE8D18', 'heart_rate',
+          [Sample(DateTime(2026, 9, 14, 9), 61)]);
+      await Collecting.instance.select('p-gaj', displayName: 'Gajendran');
+      await Store.instance.putSamples('JCV5 BE8D18', 'heart_rate',
+          [Sample(DateTime(2026, 9, 14, 10), 64)]);
+
+      final d = await Store.instance.db;
+      final stored = await d.query('samples', orderBy: 'at ASC');
+      expect(stored.first['owner'], 'p-abirami');
+      expect(stored.last['owner'], 'p-gaj');
+    });
+
     test('re-sending everything keeps each row with its own person', () async {
       await Collecting.instance.select('p-aaa', displayName: 'First');
       await Store.instance.putSamples('JCV8B 44300D', 'heart_rate',

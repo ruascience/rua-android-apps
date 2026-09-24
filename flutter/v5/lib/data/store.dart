@@ -411,16 +411,25 @@ class Store {
     final d = await db;
     final batch = d.batch();
     for (final s in segs) {
-      batch.insert(
-        'sleep_segments',
-        {
-          'device': device,
-          'start': s.start.toUtc().millisecondsSinceEpoch,
-          'minutes': s.minutes,
-          'stages': s.stages.join(','),
-          'owner': who,
-        },
-        conflictAlgorithm: ConflictAlgorithm.replace,
+      // Same rule, same reason as putSamples: a re-read must not change who a
+      // night belonged to.
+      batch.rawInsert(
+        'INSERT INTO sleep_segments(device, start, minutes, stages, owner, synced) '
+        'VALUES(?, ?, ?, ?, ?, 0) '
+        'ON CONFLICT(device, start) DO UPDATE SET '
+        '  minutes = excluded.minutes, '
+        '  stages  = excluded.stages, '
+        '  owner   = COALESCE(sleep_segments.owner, excluded.owner), '
+        '  synced  = CASE WHEN sleep_segments.minutes = excluded.minutes '
+        '             AND sleep_segments.stages = excluded.stages '
+        '             THEN sleep_segments.synced ELSE 0 END',
+        [
+          device,
+          s.start.toUtc().millisecondsSinceEpoch,
+          s.minutes,
+          s.stages.join(','),
+          who,
+        ],
       );
     }
     await batch.commit(noResult: true);
@@ -470,16 +479,46 @@ class Store {
     final d = await db;
     final batch = d.batch();
     for (final s in samples) {
-      batch.insert(
-        'samples',
-        {
-          'device': device,
-          'metric': metric,
-          'at': s.at.toUtc().millisecondsSinceEpoch,
-          'value': s.value,
-          'owner': who,
-        },
-        conflictAlgorithm: ConflictAlgorithm.replace,
+      // ⚠ NOT `ConflictAlgorithm.replace`, and this is the whole point.
+      //
+      // Replace overwrites the WHOLE row, including `owner` and `synced`.
+      // A band's history is re-read in full on every sync, so re-syncing the
+      // same band under a different session rewrote rows that already
+      // belonged to somebody — blanking their owner and, because `synced`
+      // went back to its 0 default, queueing them to be uploaded again as
+      // whoever was signed in now.
+      //
+      // That is not hypothetical. A participant's band was synced under an
+      // admin collecting for her, correctly stamped; the next day the same
+      // phone, signed in as its own user with no participant chosen,
+      // reconnected to that band and re-read its history. All 17,423 of her
+      // readings were re-stamped to nobody and re-uploaded under the
+      // operator's profile — the exact mislabel the collecting feature
+      // exists to prevent, caused by the local write path underneath it.
+      //
+      // Ownership is decided when a reading is FIRST stored and never
+      // changes: `COALESCE` keeps whoever is already there. A genuinely new
+      // reading has a new timestamp and gets today's owner, which is the
+      // behaviour that was wanted all along.
+      //
+      // `synced` is likewise preserved unless the value actually changed, so
+      // re-reading a band no longer re-queues thousands of rows that the
+      // server already holds.
+      batch.rawInsert(
+        'INSERT INTO samples(device, metric, at, value, owner, synced) '
+        'VALUES(?, ?, ?, ?, ?, 0) '
+        'ON CONFLICT(device, metric, at) DO UPDATE SET '
+        '  value  = excluded.value, '
+        '  owner  = COALESCE(samples.owner, excluded.owner), '
+        '  synced = CASE WHEN samples.value = excluded.value '
+        '            THEN samples.synced ELSE 0 END',
+        [
+          device,
+          metric,
+          s.at.toUtc().millisecondsSinceEpoch,
+          s.value,
+          who,
+        ],
       );
     }
     await batch.commit(noResult: true);
