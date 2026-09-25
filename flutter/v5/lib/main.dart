@@ -7,8 +7,10 @@ import 'ble/band_link.dart';
 import 'data/profile.dart';
 import 'ui/device_page.dart';
 import 'ui/home_page.dart';
+import 'ui/lock_page.dart';
 import 'data/background.dart';
 import 'data/cloud_sync.dart';
+import 'data/app_lock.dart';
 import 'data/collecting.dart';
 import 'data/session.dart';
 import 'data/sync_service.dart';
@@ -52,6 +54,7 @@ Future<void> main() async {
   // would send a burst of unauthenticated requests on every launch.
   await Session.instance.load();
   await Collecting.instance.load();
+  await AppLock.instance.load();
 
   var storageFailed = false;
   try {
@@ -200,9 +203,19 @@ class AuraV5App extends StatelessWidget {
               applyPaletteFor(Theme.of(inner).brightness);
               return StreamBuilder<void>(
                 stream: Session.instance.changes,
-                builder: (context, _) => Session.instance.signedIn
-                    ? Shell(storageFailed: storageFailed)
-                    : const LoginPage(),
+                builder: (context, _) {
+                  if (!Session.instance.signedIn) return const LoginPage();
+                  // The lock sits INSIDE the signed-in branch: it guards an
+                  // existing session, it cannot create one. Someone who is
+                  // not signed in needs a password, not a fingerprint.
+                  return StreamBuilder<void>(
+                    stream: AppLock.instance.changes,
+                    builder: (context, _) =>
+                        AppLock.instance.enabled && !AppLock.instance.unlocked
+                            ? const LockPage()
+                            : Shell(storageFailed: storageFailed),
+                  );
+                },
               );
             },
           ),
@@ -217,17 +230,39 @@ class Shell extends StatefulWidget {
   State<Shell> createState() => _ShellState();
 }
 
-class _ShellState extends State<Shell> {
+class _ShellState extends State<Shell> with WidgetsBindingObserver {
   int _tab = 0;
+
+  /// Re-arm the lock when the app leaves the screen.
+  ///
+  /// Without this the lock is satisfied once per launch, and Android keeps
+  /// an app alive for a long time — the foreground service keeps this one
+  /// alive indefinitely on purpose. Somebody picking up the phone an hour
+  /// later would walk straight into the readings.
+  ///
+  /// `paused` only, not `inactive`: inactive fires for a notification shade
+  /// pull or the biometric prompt itself, and re-locking on those would make
+  /// the app unusable.
+  @override
+  void didChangeAppLifecycleState(AppLifecycleState state) {
+    if (state == AppLifecycleState.paused) AppLock.instance.relock();
+  }
 
   @override
   void initState() {
     super.initState();
+    WidgetsBinding.instance.addObserver(this);
     // After the first frame: the sheet needs a Navigator, and this widget is
     // the first thing under one.
     WidgetsBinding.instance.addPostFrameCallback((_) {
       if (mounted) ensureOnboarded(context);
     });
+  }
+
+  @override
+  void dispose() {
+    WidgetsBinding.instance.removeObserver(this);
+    super.dispose();
   }
 
   /// Index of DevicePage in [_pages].

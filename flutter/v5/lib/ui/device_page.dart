@@ -10,6 +10,7 @@ import '../ble/band_link.dart';
 import '../data/profile.dart';
 import '../data/background.dart';
 import '../data/cloud_sync.dart';
+import '../data/app_lock.dart';
 import '../data/collecting.dart';
 import '../data/session.dart';
 import '../data/store.dart';
@@ -99,6 +100,7 @@ class _DevicePageState extends State<DevicePage> {
   @override
   void initState() {
     super.initState();
+    unawaited(_checkBiometric());
     profile.load().then((_) => mounted ? setState(() {}) : null);
     // Evaluate the blocker without prompting: the card should already be
     // showing when the user arrives, not only after a scan has failed once.
@@ -817,6 +819,85 @@ class _DevicePageState extends State<DevicePage> {
     unawaited(CloudSync.instance.flush());
   }
 
+  /// Unlock with a fingerprint instead of retyping a password.
+  ///
+  /// Sits next to the account, because that is what it guards. Hidden on a
+  /// phone with no enrolled biometric: a switch that can only ever produce
+  /// "your phone cannot do this" is worse than no switch.
+  Widget _lockCard(ThemeData t) => StreamBuilder<void>(
+        stream: AppLock.instance.changes,
+        builder: (context, _) {
+          if (!_biometricAvailable) return const SizedBox.shrink();
+          final lock = AppLock.instance;
+          return Card(
+            child: Padding(
+              padding: const EdgeInsets.fromLTRB(16, 12, 16, 12),
+              child: Column(
+                crossAxisAlignment: CrossAxisAlignment.start,
+                children: [
+                  Row(children: [
+                    Icon(Icons.fingerprint, size: 20, color: kMuted),
+                    const SizedBox(width: 12),
+                    Expanded(
+                      child: Text('Unlock with fingerprint',
+                          style: t.textTheme.titleMedium),
+                    ),
+                    Switch(
+                      value: lock.enabled,
+                      onChanged: _lockBusy ? null : _toggleLock,
+                    ),
+                  ]),
+                  const SizedBox(height: 4),
+                  Text(
+                    lock.enabled
+                        ? 'Asked for when you open the app. Your band keeps '
+                            'collecting and syncing while it is locked.'
+                        : 'Locks the app behind your fingerprint or face. You '
+                            'still sign in with your password the first time '
+                            'and after signing out — this only protects the '
+                            'session already on this phone.',
+                    style: t.textTheme.bodySmall
+                        ?.copyWith(color: kMuted, height: 1.4),
+                  ),
+                  if (_lockError.isNotEmpty) ...[
+                    const SizedBox(height: 8),
+                    Text(_lockError,
+                        style: t.textTheme.bodySmall?.copyWith(color: kBad)),
+                  ],
+                ],
+              ),
+            ),
+          );
+        },
+      );
+
+  bool _biometricAvailable = false;
+  bool _lockBusy = false;
+  String _lockError = '';
+
+  Future<void> _checkBiometric() async {
+    final ok = await AppLock.instance.available();
+    if (mounted) setState(() => _biometricAvailable = ok);
+  }
+
+  Future<void> _toggleLock(bool on) async {
+    setState(() {
+      _lockBusy = true;
+      _lockError = '';
+    });
+    String? why;
+    if (on) {
+      why = await AppLock.instance.enable();
+    } else {
+      await AppLock.instance.disable();
+    }
+    if (!mounted) return;
+    setState(() {
+      _lockBusy = false;
+      _lockError = why ?? '';
+    });
+  }
+
   Widget _accountCard(ThemeData t) => StreamBuilder<void>(
         stream: Session.instance.changes,
         builder: (context, _) {
@@ -1307,6 +1388,8 @@ class _DevicePageState extends State<DevicePage> {
         _collectingCard(t),
         _accountCard(t),
         const SizedBox(height: 12),
+        _lockCard(t),
+        const SizedBox(height: 12),
         _cloudCard(t),
         if (showAdvancedCards) ...[
           const SizedBox(height: 12),
@@ -1381,6 +1464,8 @@ class _DevicePageState extends State<DevicePage> {
         const SizedBox(height: 12),
         _collectingCard(t),
         _accountCard(t),
+        const SizedBox(height: 12),
+        _lockCard(t),
         const SizedBox(height: 12),
         _cloudCard(t),
         if (showAdvancedCards) ...[

@@ -53,6 +53,7 @@ dependencies:
   # A foreground service. Android stops an app's timers when it leaves the
   # foreground, which is why nothing synced unless the app was open.
   flutter_foreground_task: ^9.1.0
+  local_auth: ^3.0.2
 
 dev_dependencies:
   flutter_test:
