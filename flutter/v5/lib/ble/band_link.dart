@@ -14,6 +14,7 @@ import 'package:flutter/foundation.dart';
 import 'package:flutter_blue_plus/flutter_blue_plus.dart';
 import 'package:permission_handler/permission_handler.dart';
 
+import '../data/background.dart';
 import '../data/profile.dart';
 import '../protocol/jstyle.dart' as j;
 
@@ -492,6 +493,12 @@ class BandLink {
           displayName: target.platformName);
       state = LinkState.connected;
       _log('connected — write ${_write!.uuid.str}, notify ${_notify!.uuid.str}');
+      // A successful connect is the first moment the app is certain to hold a
+      // Bluetooth runtime permission, and Android will not start a
+      // `connectedDevice` foreground service without one. On a fresh install
+      // this is therefore when background collecting can finally begin — the
+      // attempt at startup was necessarily too early.
+      unawaited(BackgroundSync.instance.ensureStarted());
       if (firmware != null) {
         _log('firmware $firmware  hardware $hardware');
       } else {

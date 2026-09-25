@@ -33,7 +33,19 @@ class BackgroundSync {
 
   static const _kEnabled = 'background.enabled';
 
+  /// Whether the service is actually running.
   bool enabled = false;
+
+  /// Whether it is MEANT to be running.
+  ///
+  /// Separate from [enabled] because starting can fail for a reason that is
+  /// nobody's decision — most often the notification permission, which cannot
+  /// be asked for during startup because there is no frame to show a dialog
+  /// on yet. Collapsing the two turned "we have not asked you yet" into "you
+  /// said no", and the service then never started on a fresh install: the
+  /// exact case every new participant is in.
+  bool wanted = false;
+
   bool get supported => defaultTargetPlatform == TargetPlatform.android;
 
   final _changes = StreamController<void>.broadcast();
@@ -53,18 +65,64 @@ class BackgroundSync {
       // The cost is a permanent notification, which is Android telling the
       // truth: the app really is running. It remains switchable on the Band
       // tab for anyone who would rather sync by hand.
-      enabled = p.getBool(_kEnabled) ?? true;
-      if (enabled) {
-        // `persist: false` so a refusal (notification permission denied, say)
-        // does not get written down as a preference the user never expressed.
-        final why = await start(persist: false);
-        if (why != null) {
-          enabled = false;
-          debugPrint('[AuraV5] background sync could not start: $why');
-        }
-      }
+      wanted = p.getBool(_kEnabled) ?? true;
+      // Deliberately does NOT start here. `start()` asks for the notification
+      // permission, and a permission dialog needs a frame to appear on —
+      // during startup there is none, so the request is refused before anyone
+      // sees it. [ensureStarted] is called once the UI is up.
     } catch (e) {
       debugPrint('[AuraV5] background sync state unavailable: $e');
+    }
+  }
+
+  /// Start it if it is meant to be running and is not already.
+  ///
+  /// Called after the first frame — and after onboarding, so the permission
+  /// dialog does not land behind a modal sheet. Safe to call repeatedly.
+  Future<void> ensureStarted() async {
+    if (!supported || !wanted || enabled) return;
+
+    // Android will not start a `connectedDevice` foreground service unless
+    // the app already HOLDS a runtime Bluetooth permission:
+    //
+    //   SecurityException: Starting FGS with type connectedDevice ...
+    //   requires any of [BLUETOOTH_CONNECT, BLUETOOTH_SCAN, ...]
+    //
+    // Those are granted the first time somebody scans, which is after this.
+    // Attempting anyway does not merely fail: the service is left in a
+    // half-started state and Android retries it every five seconds, so a
+    // fresh install sat in a permanent crash loop, logging and burning
+    // battery while never collecting anything.
+    //
+    // So: only when the permission is actually in hand. Called again after a
+    // successful connect, which is the moment it becomes true.
+    if (!await _bluetoothGranted()) {
+      debugPrint('[AuraV5] background sync waiting for Bluetooth permission');
+      return;
+    }
+
+    final why = await start(persist: false);
+    if (why != null) {
+      // Not written down as a preference: the person never expressed one, and
+      // recording a refusal here would stop the app ever asking again.
+      debugPrint('[AuraV5] background sync could not start: $why');
+    }
+  }
+
+  /// Does the app hold a Bluetooth runtime permission yet?
+  ///
+  /// Either is enough for the foreground-service type; the app asks for both
+  /// when it first scans.
+  Future<bool> _bluetoothGranted() async {
+    try {
+      if (await Permission.bluetoothConnect.isGranted) return true;
+      if (await Permission.bluetoothScan.isGranted) return true;
+      // Pre-Android-12 phones have no such runtime permission and the old
+      // umbrella one is granted at install.
+      return await Permission.bluetooth.isGranted;
+    } catch (e) {
+      debugPrint('[AuraV5] could not check Bluetooth permission: $e');
+      return false;
     }
   }
 
@@ -124,6 +182,7 @@ class BackgroundSync {
       return 'Could not start the background service: $e';
     }
     enabled = true;
+    wanted = true;
     if (persist) await _persist();
     _changes.add(null);
     return null;
@@ -136,6 +195,7 @@ class BackgroundSync {
       debugPrint('[AuraV5] could not stop background service: $e');
     }
     enabled = false;
+    wanted = false;
     await _persist();
     _changes.add(null);
   }

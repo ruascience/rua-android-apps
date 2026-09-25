@@ -254,8 +254,14 @@ class _ShellState extends State<Shell> with WidgetsBindingObserver {
     WidgetsBinding.instance.addObserver(this);
     // After the first frame: the sheet needs a Navigator, and this widget is
     // the first thing under one.
-    WidgetsBinding.instance.addPostFrameCallback((_) {
-      if (mounted) ensureOnboarded(context);
+    WidgetsBinding.instance.addPostFrameCallback((_) async {
+      if (!mounted) return;
+      await ensureOnboarded(context);
+      // AFTER onboarding: the service asks for the notification permission,
+      // and that dialog must not land behind the modal sheet. This is the
+      // first moment in the app's life when a permission dialog can actually
+      // be shown — which is why it is not done at startup.
+      await BackgroundSync.instance.ensureStarted();
     });
   }
 
