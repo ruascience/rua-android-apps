@@ -644,13 +644,23 @@ class BandLink {
         return false;
       }
 
-      _log('looking for last band $id');
+      // The advertised name, as a fallback key. A band that has been factory
+      // reset comes back advertising the same name on a DIFFERENT address,
+      // so matching on the stored address alone finds nothing and this
+      // method gives up silently — the phone then never syncs, and from the
+      // outside the app simply does not collect. Two participants were in
+      // exactly that state with reset bands.
+      final name = Profile.instance.bandDisplayName;
+
+      _log('looking for last band $id'
+          '${name == null || name.isEmpty ? "" : " (or a band named $name)"}');
       // scan() publishes into `found` as devices are heard, so this can stop
       // the moment the right one appears instead of waiting out the window.
       unawaited(scan(timeout: lookFor));
 
       final deadline = DateTime.now().add(lookFor + const Duration(seconds: 2));
       Candidate? hit;
+      Candidate? byName;
       while (DateTime.now().isBefore(deadline) && hit == null) {
         await Future.delayed(const Duration(milliseconds: 250));
         for (final c in found) {
@@ -658,7 +668,23 @@ class BandLink {
             hit = c;
             break;
           }
+          // Remembered only, never used to pick a stranger: the name has to
+          // match the one this phone already files its readings under.
+          if (byName == null &&
+              name != null &&
+              name.isNotEmpty &&
+              c.name == name) {
+            byName = c;
+          }
         }
+      }
+
+      if (hit == null && byName != null) {
+        // Said out loud, because it means the stored address is now wrong and
+        // every future auto-connect would keep failing until it is replaced.
+        _log('address $id did not answer; matched by name instead — '
+            'the band was probably reset');
+        hit = byName;
       }
 
       if (hit == null) {

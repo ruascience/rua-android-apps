@@ -69,9 +69,22 @@ Future<void> main() async {
   // the interesting data is whatever the band logged while we were away.
   unawaited(() async {
     try {
-      if (await BandLink.instance.connectToRemembered()) {
+      // `connectToRemembered` answers false when there was nothing to do —
+      // including when the band is ALREADY connected, which is not a reason
+      // to skip the sync. It was, though: opening the app with the band
+      // still linked from a previous run pulled nothing, which is precisely
+      // the "the app is open, why is nothing arriving" case.
+      //
+      // Sync whenever we end up connected, however we got there.
+      final reconnected = await BandLink.instance.connectToRemembered();
+      if (reconnected || BandLink.instance.connected) {
         await SyncService.instance.syncAll();
       }
+      // From here on the band is re-read on a timer rather than only when
+      // somebody opens the app. Started regardless of whether the connect
+      // above worked: the band may come into range later, and syncAll()
+      // skips harmlessly while it is not connected.
+      SyncService.instance.startAutoSync();
     } catch (e) {
       debugPrint('[AuraV5] startup reconnect failed: $e');
     }

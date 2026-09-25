@@ -66,6 +66,34 @@ class SyncService {
   final _changes = StreamController<void>.broadcast();
   Stream<void> get changes => _changes.stream;
 
+  /// How often a connected band is re-read without anyone asking.
+  ///
+  /// The band logs on its own every 10 minutes; pulling every quarter of an
+  /// hour keeps the cloud within a sync of the wrist without lighting a
+  /// sensor — a history read is bytes off the band, not a measurement.
+  static const autoSyncEvery = Duration(minutes: 15);
+
+  Timer? _autoTimer;
+
+  /// Keep a connected band being read, with no taps at all.
+  ///
+  /// Sync used to happen only on connect. A band that stayed connected for
+  /// eight hours was therefore read once, at the start, and everything it
+  /// logged afterwards sat on the wrist until somebody opened the app again
+  /// — which for a participant wearing it all day means their data simply
+  /// does not arrive.
+  ///
+  /// Safe to call repeatedly; `syncAll` skips when busy or disconnected.
+  void startAutoSync() {
+    _autoTimer?.cancel();
+    _autoTimer = Timer.periodic(autoSyncEvery, (_) => unawaited(syncAll()));
+  }
+
+  void stopAutoSync() {
+    _autoTimer?.cancel();
+    _autoTimer = null;
+  }
+
   Future<void> syncAll() async {
     if (_busy || !_link.connected) return;
 

@@ -42,10 +42,27 @@ class BackgroundSync {
   Future<void> load() async {
     try {
       final p = await SharedPreferences.getInstance();
-      enabled = p.getBool(_kEnabled) ?? false;
-      // Off by default and started only on request: a persistent notification
-      // that nobody asked for is how an app gets uninstalled.
-      if (enabled) await start(persist: false);
+      // ON by default now.
+      //
+      // Android stops this app the moment it leaves the screen, and with it
+      // the band connection and every sync timer. Off by default meant a
+      // participant wearing the band all day collected nothing unless they
+      // remembered to open the app — which is not a thing to ask of someone
+      // in a study, and was the practical reason data stopped arriving.
+      //
+      // The cost is a permanent notification, which is Android telling the
+      // truth: the app really is running. It remains switchable on the Band
+      // tab for anyone who would rather sync by hand.
+      enabled = p.getBool(_kEnabled) ?? true;
+      if (enabled) {
+        // `persist: false` so a refusal (notification permission denied, say)
+        // does not get written down as a preference the user never expressed.
+        final why = await start(persist: false);
+        if (why != null) {
+          enabled = false;
+          debugPrint('[AuraV5] background sync could not start: $why');
+        }
+      }
     } catch (e) {
       debugPrint('[AuraV5] background sync state unavailable: $e');
     }
