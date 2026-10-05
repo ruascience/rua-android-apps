@@ -70,7 +70,18 @@ class CloudSync {
   /// The server in AKS, reached by address: there is no hostname for it, so
   /// there is no TLS either. `localhost` would be the PHONE, which is the
   /// classic way this looks broken for an afternoon.
-  static const defaultBaseUrl = 'https://48.202.193.164:8101';
+  static const defaultBaseUrl = 'https://65.0.59.203';
+
+  /// Addresses this app used to live at.
+  ///
+  /// A phone that still has one of these stored is moved to
+  /// [defaultBaseUrl] on the next launch — see `start()`. Keep old entries
+  /// here for ever: a phone that has been offline for months is exactly the
+  /// one that still holds the oldest address.
+  static const _retiredBaseUrls = <String>{
+    // Azure AKS, Sep 2026. Self-signed, pinned, port 8101.
+    'https://48.202.193.164:8101',
+  };
 
   /// The server's self-signed certificate, pinned.
   ///
@@ -85,24 +96,24 @@ class CloudSync {
   /// 2028-12-12.
   static const pinnedCertPem = '''
 -----BEGIN CERTIFICATE-----
-MIIDOzCCAiOgAwIBAgIUO1pBbiMquqXYUlv6jfvXfQP7RMYwDQYJKoZIhvcNAQEL
-BQAwJDEUMBIGA1UEAwwLYXVyYS12NS1hcGkxDDAKBgNVBAoMA1JVQTAeFw0yNjA5
-MDkxODM1MzdaFw0yODEyMTIxODM1MzdaMCQxFDASBgNVBAMMC2F1cmEtdjUtYXBp
-MQwwCgYDVQQKDANSVUEwggEiMA0GCSqGSIb3DQEBAQUAA4IBDwAwggEKAoIBAQCe
-n1neZtsDpENJen2SWRXTjKzS6//SV0Ra/4BYQm+FVYOb/C4YEJ0L1jHzJW9hMWl0
-cBEnSBYGatk9rjnOw+38Y/PWbtdb8CwGHBwqwYm6lz3KRk0teSxzv3JD+q1civ91
-aodMGBhp+Z4BOGE2riH/HNJIiXruKF9/3oKoxdYrFJTMxXLVJA7zr4Y4v5zoqnvn
-S9PqDwKT+T7s2UT8BFP0XC5XnQizkuXbc7TUC04EhcX0vRdNyCq4QhTwODPOdB+B
-bGzwENZL1htjKKCCi96as5VQKH+qV3oku1sL9OtHCFPFdmlqxGTVe/rtY5qC+Kkl
-4k+pJ+64lIO4w8pG2+r1AgMBAAGjZTBjMAwGA1UdEwEB/wQCMAAwDgYDVR0PAQH/
-BAQDAgWgMBMGA1UdJQQMMAoGCCsGAQUFBwMBMA8GA1UdEQQIMAaHBDDKwaQwHQYD
-VR0OBBYEFC/ROoEbSka6OYLSqCIjIDHFglhdMA0GCSqGSIb3DQEBCwUAA4IBAQA2
-TlVPiQX0uR4Yf/vt6B59cdl6222tqXRWcSCB0IiTieIQnRQR9jL1k0HXBopSExdb
-YvMYoqyAPNWY5jGOUcB49G+kldr0P/nlx0yfEFRa5BJU0AJiI3pPsS7wPHWCEsOF
-nWcGqvxXJXkm0b+pf1Cg46byQUQPUOi0u3S5PaRtdUWRgNnRcWO46VNONLHHo49K
-jyhn7zPAyvS/SaEpVHhuQqTEmCXhVlF8U9P2gm2e1crp5ZG/BTwi/MpzI3cSOGlL
-9eRrzQa082rsFbxQSrOt0LmBNyiqDOrM3B/KfRZo7UX5N7PICJWAaj0p89T62Ql+
-5R4ilAjIHIhrmRO29Wrn
+MIIDOzCCAiOgAwIBAgIUMwkrXiXCRow8/4JimRhvy9gNd6AwDQYJKoZIhvcNAQEL
+BQAwJDEUMBIGA1UEAwwLYXVyYS12NS1hcGkxDDAKBgNVBAoMA1JVQTAeFw0yNjEw
+MDUwNzE2NTZaFw0yOTEwMDQwNzE2NTZaMCQxFDASBgNVBAMMC2F1cmEtdjUtYXBp
+MQwwCgYDVQQKDANSVUEwggEiMA0GCSqGSIb3DQEBAQUAA4IBDwAwggEKAoIBAQCz
+jWjusIoBnf8sMEamAAIKSNE/7/iNone3D3VlCaRx2UtxFBpxFtgpvCFLP37p94tO
+HbUV0J7MHvelFZE0msEcfRMgvdFiseOvIfako8Yj93YEUeYDHR0YWdwmiH9q5AXS
++uyEd4G92zLBNc6WehkqacMRmzaEA6L2gLmyQzXO+B+NfD1wM5x+GvZ67/vQ6fVF
+TSx1urwvEWHOg5gh8u1Edl6Bhq5564gwvo3rhAP3NS9GuSO9h3/Wm5/IxgYxVC1l
+EosxXbWWlP0lgpuEH9YinV9QviDHFHUIWrrdHznBB0EAFYGpz17yWYfyCU/tQS3J
+kBES5gzpqh8BGbNMlHFvAgMBAAGjZTBjMAwGA1UdEwEB/wQCMAAwDgYDVR0PAQH/
+BAQDAgWgMBMGA1UdJQQMMAoGCCsGAQUFBwMBMA8GA1UdEQQIMAaHBEEAO8swHQYD
+VR0OBBYEFECE1cD9E5nMkppoOGN11MpcFpoEMA0GCSqGSIb3DQEBCwUAA4IBAQCq
+c2dJTMaHVJCPFWNxj1vBALlaqfC7P7PzC4XQU5xIQrFZaTaSr7ZxeHhUaOU66y3f
+oW6Mx8Eq9H8guvnXC6SaepnGlW8OIiMKC8tJJ56ZLZ9YfJ0qDFwX7OPcMfgJyPJv
+6zNwq+PXMvILaC8loAIe9eGMFyrGQANI/IBrP0xbzHrhm7QmGiyx9lHSKuRcZWfg
+DEb5XkGKWeCiq/NqYOejZkjeXhvZ4eekB/I2OLmvNi5+dfTy6NXKgr4TADy/Ndxn
+m6Mw73Ymp7DnsDCg5GY+7joqHOSEF4kc2d4jhgMTROQHwKf7iWVGDQ4pAL1IjVXt
+RyHdiVXmqAXT8iLdyihi
 -----END CERTIFICATE-----''';
 
   /// The same certificate as DER, base64, for the exact-match fallback below.
@@ -272,6 +283,26 @@ jyhn7zPAyvS/SaEpVHhuQqTEmCXhVlF8U9P2gm2e1crp5ZG/BTwi/MpzI3cSOGlL
     try {
       final p = await SharedPreferences.getInstance();
       baseUrl = p.getString(_kBase) ?? defaultBaseUrl;
+
+      // Retire a server that has moved.
+      //
+      // The address is REMEMBERED, so changing `defaultBaseUrl` only affects
+      // fresh installs: everybody upgrading would have carried on talking to
+      // the old host until it was switched off, and then queued for ever
+      // against an address that answers nothing. Nobody would have seen a
+      // message — the outbox pauses silently, which is exactly what it is
+      // meant to do when a server is briefly down.
+      //
+      // So a stored address that is known to be retired is replaced once,
+      // and the replacement is written back so this only happens on the
+      // first run after the upgrade. An address the user typed themselves is
+      // left alone: it is not on this list.
+      if (_retiredBaseUrls.contains(baseUrl)) {
+        debugPrint('[AuraV5] server moved: $baseUrl -> $defaultBaseUrl');
+        baseUrl = defaultBaseUrl;
+        await p.setString(_kBase, baseUrl);
+      }
+
       enabled = p.getBool(_kEnabled) ?? true;
     } catch (_) {
       // Preferences unavailable — carry on with the defaults rather than
