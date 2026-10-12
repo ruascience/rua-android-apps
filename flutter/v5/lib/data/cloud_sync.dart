@@ -533,7 +533,20 @@ RyHdiVXmqAXT8iLdyihi
   Future<void> _pushProfile() async {
     final p = Profile.instance;
     final device = p.bandDisplayName;
-    if (device == null || device.isEmpty || !p.onboarded) return;
+
+    // A BAND is not required to have a body.
+    //
+    // This used to return unless a band had been paired, because the profile
+    // was once keyed by the band's advertised name — there was nothing else
+    // to file it under. An account identifies the person now, so the only
+    // real precondition is having asked them: no details, nothing to push.
+    //
+    // The old gate meant somebody could sign in, fill in their age, sex,
+    // height, weight and period dates, press Save, and have none of it leave
+    // the phone — silently, with the sync card reading "0 waiting" and the
+    // activity log reading "nothing yet", because this returns before
+    // anything is recorded. Observed exactly that on a real phone.
+    if (!p.onboarded) return;
 
     // ⚠ Never while collecting for somebody else.
     //
@@ -586,7 +599,11 @@ RyHdiVXmqAXT8iLdyihi
             headers: _jsonHeaders,
             body: jsonEncode({
               'id': id,
-              'device': device,
+              // Omitted rather than sent as null when no band is paired: the
+              // server carries forward the device it already holds, and
+              // blanking it would lose the by-band lookup that reunites a
+              // phone with its profile after a reinstall.
+              if (device != null && device.isNotEmpty) 'device': device,
               // The BLE ADDRESS, not the advertised name above. They are two
               // different facts and the server wants both: `device` is what
               // the samples are filed under, `bandId` is what survives the
