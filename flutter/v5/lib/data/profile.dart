@@ -13,6 +13,7 @@ import 'package:flutter/foundation.dart';
 
 import 'package:shared_preferences/shared_preferences.dart';
 
+import 'session.dart';
 import 'store.dart';
 import 'uuid.dart';
 
@@ -501,6 +502,40 @@ class Profile {
   /// Once set, it is never regenerated. There is no code path that clears it.
   Future<String?> ensureProfileId(
       {ProfileIdLookup? lookup, ProfileMintGate? mintGate}) async {
+    // The signed-in account's profile id, which outranks everything below.
+    //
+    // Everything after this point is from before accounts existed, when the
+    // only way to know who a phone belonged to was to ask which profile its
+    // BAND was filed under. That algorithm cannot answer for a new
+    // participant: their band has never had a profile, so the lookup finds
+    // nothing, and the mint gate then refuses because the server does hold
+    // profiles — other people's. It returns null, the push is deferred, and
+    // it is deferred identically on every launch for ever.
+    //
+    // The effect was silent and total: four participants — one of them with
+    // 190,363 readings — had no profile document at all, so their age, sex,
+    // height, weight and period dates reached the server never. Their
+    // READINGS were always filed correctly, because the server stamps the
+    // owner from the authenticated account and ignores what the client
+    // claims, which is why nothing else looked wrong.
+    //
+    // And that same server rule is why this is the right answer rather than
+    // merely a working one: `putProfile` does `in.setId(owner)` from the
+    // authenticated account, so the id computed here is overwritten anyway.
+    // Deferring a push over an id the server discards is pure loss.
+    final session = Session.instance.profileId;
+    if (Session.instance.signedIn && session != null && session.isNotEmpty) {
+      if (profileId != session) {
+        // Adopt it. A locally minted id that disagrees with the account is
+        // how a profile document ends up under one id while the readings sit
+        // under another — the two halves of one person, filed apart.
+        debugPrint('[AuraV5] adopting account profile id $session');
+        profileId = session;
+        await save();
+      }
+      return session;
+    }
+
     final stored = profileId;
     if (stored != null && stored.isNotEmpty) return stored;
 
