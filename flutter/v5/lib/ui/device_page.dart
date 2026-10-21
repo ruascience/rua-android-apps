@@ -1017,6 +1017,17 @@ class _DevicePageState extends State<DevicePage> {
                       Text(cloud.lastError,
                           style: t.textTheme.bodySmall?.copyWith(color: kBad)),
                     ],
+                    // Said as a number: these rows are on the phone and not
+                    // on the server, and "Sync error" alone does not say
+                    // whether anything was kept. "Re-send all" queues them
+                    // again.
+                    if (cloud.rejected > 0) ...[
+                      const SizedBox(height: 6),
+                      Text(
+                          '${cloud.rejected} rows refused by the server are '
+                          'kept on this phone. Re-send all queues them again.',
+                          style: t.textTheme.bodySmall?.copyWith(color: kBad)),
+                    ],
                     const Divider(height: 24),
                     TextField(
                       controller: _urlCtl,

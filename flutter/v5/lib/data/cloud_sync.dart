@@ -128,12 +128,16 @@ RyHdiVXmqAXT8iLdyihi
   int pending = 0;
   int pushedThisSession = 0;
 
-  /// Rows the server accepted a 4xx on and the phone therefore threw away.
+  /// Rows the server answered a 4xx to during this session.
   ///
-  /// Separate from [pushedThisSession] so a drop is a NUMBER the Device tab can
-  /// show, not just a colour. Non-zero here always means data left the phone
-  /// without reaching the server.
-  int discardedThisSession = 0;
+  /// Separate from [pushedThisSession] so a refusal is a NUMBER the Device
+  /// tab can show, not just a colour. The rows themselves are not lost: they
+  /// are set aside on the phone (see Store.markSamplesRejected) and
+  /// [rejected] counts everything held that way.
+  int rejectedThisSession = 0;
+
+  /// Rows refused by the server and kept on this phone, across sessions.
+  int rejected = 0;
 
   final _changes = StreamController<void>.broadcast();
   Stream<void> get changes => _changes.stream;
@@ -362,6 +366,7 @@ RyHdiVXmqAXT8iLdyihi
   Future<void> refreshPending() async {
     try {
       pending = await Store.instance.pendingCount();
+      rejected = await Store.instance.rejectedCount();
       _emit();
     } catch (_) {
       // A count is cosmetic; never let it break anything.
@@ -406,8 +411,8 @@ RyHdiVXmqAXT8iLdyihi
       // Rows the server refused. Counted apart from `moved` because they are
       // the opposite of progress, and folding them together is what made the
       // Device tab report "55779 pushed, 0 waiting, synced just now" at the
-      // exact moment the backlog was being thrown away.
-      var discarded = 0;
+      // exact moment the backlog was being set aside.
+      var rejected = 0;
       // Loop so a large backlog drains in one go rather than one batch per
       // trigger — after a week offline that would take a week to catch up.
       while (true) {
@@ -442,13 +447,17 @@ RyHdiVXmqAXT8iLdyihi
             }
         ]);
         if (!ok) return; // stays queued; state already set by _post
-        // Marked even when the server REFUSED them: a 4xx is permanent, and
-        // leaving a poison row queued wedges the outbox forever.
-        await Store.instance.markSamplesSynced(rows);
         if (_rejectedThisRun) {
-          // ⚠ Stop the drain. Marking a rejected batch is what keeps the queue
-          // moving; CONTINUING to drain after one is what turns a single bad
-          // batch into the whole backlog.
+          // A 4xx is permanent, and leaving a poison row queued wedges the
+          // outbox forever — so the batch leaves the queue. But it is SET
+          // ASIDE, not marked synced: marking it synced was a discard, and a
+          // discard is what turned a blank band name into five missing days
+          // for two participants. Whatever the server objected to can be
+          // fixed and the rows sent again; thrown-away rows cannot.
+          await Store.instance.markSamplesRejected(rows);
+          // ⚠ Stop the drain. Setting a rejected batch aside is what keeps
+          // the queue moving; CONTINUING to drain after one is what turns a
+          // single bad batch into the whole backlog.
           //
           // The case that matters is version skew, and it is not hypothetical:
           // a build sending this payload to an API that still requires
@@ -458,11 +467,13 @@ RyHdiVXmqAXT8iLdyihi
           // so they are then invisible; the only way back is "Re-send all",
           // which a user has no reason to press.
           //
-          // Losing 500 rows and stopping is strictly better than losing all of
-          // them, in the poison-row case as well as this one.
-          discarded += rows.length;
+          // Setting 500 rows aside and stopping is strictly better than
+          // setting all of them aside, in the poison-row case as well as
+          // this one.
+          rejected += rows.length;
           break;
         }
+        await Store.instance.markSamplesSynced(rows);
         moved += rows.length;
         if (rows.length < sampleBatch) break;
       }
@@ -487,11 +498,12 @@ RyHdiVXmqAXT8iLdyihi
             }
         ]);
         if (!ok) return;
-        await Store.instance.markSleepSynced(rows);
         if (_rejectedThisRun) {
-          discarded += rows.length;
+          await Store.instance.markSleepRejected(rows);
+          rejected += rows.length;
           break;
         }
+        await Store.instance.markSleepSynced(rows);
         moved += rows.length;
         if (rows.length < sleepBatch) break;
       }
@@ -500,9 +512,9 @@ RyHdiVXmqAXT8iLdyihi
 
       // Only 2xx-accepted rows count as pushed, and only they refresh the
       // "last sync" clock — otherwise both indicators assert success while
-      // data is being discarded.
+      // data is being refused.
       pushedThisSession += moved;
-      discardedThisSession += discarded;
+      rejectedThisSession += rejected;
       if (moved > 0) lastSuccess = DateTime.now();
       if (_rejectedThisRun || _profileRejectedThisRun) {
         // Everything drained, but something was refused. Keep saying so —

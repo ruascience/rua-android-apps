@@ -113,6 +113,17 @@ class SyncService {
       _changes.add(null);
       return;
     }
+    // Nor until we know which band it is. Every row is keyed on the band's
+    // name and the server refuses a blank one, so a read now would store
+    // rows that can never be uploaded. The band keeps its history until the
+    // name is known; see BandLink.connect, which now guarantees one.
+    if (_link.deviceName.isEmpty) {
+      _link.log.add('sync skipped — the band has not said its name; '
+          'nothing read, nothing lost');
+      lastError = 'The band did not give its name. Reconnect and try again.';
+      _changes.add(null);
+      return;
+    }
     _busy = true;
     storedThisRun = 0;
     lastError = '';
@@ -332,6 +343,8 @@ class PeriodicSampler {
     // notify characteristic and misattributes the replies. A skipped tick is
     // picked up by the next one rather than queued behind a long sync.
     if (_running || !_link.connected || SyncService.instance.busy) return;
+    // Same rule as syncAll: no name, no row.
+    if (_link.deviceName.isEmpty) return;
     _running = true;
     try {
       final start = _link.replies.length;

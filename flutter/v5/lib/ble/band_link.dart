@@ -390,6 +390,35 @@ class BandLink {
 
   // ------------------------------------------------------------- connect
 
+  /// The name the band advertises, from whichever source still has it.
+  ///
+  /// Android's `platformName` is a cache that is empty until the GATT name
+  /// has been read, and a reconnect by address never reads it. The scan that
+  /// found the band saw the advertisement, so `found` is asked second.
+  String _advertisedName(BluetoothDevice target) {
+    if (target.platformName.isNotEmpty) return target.platformName;
+    for (final c in found) {
+      if (c.device.remoteId == target.remoteId && c.name.isNotEmpty) {
+        return c.name;
+      }
+    }
+    return '';
+  }
+
+  /// A name for a band that would not say its own. Never ''.
+  ///
+  /// The one this phone already files its readings under, so the history
+  /// stays in one piece; failing that the address, which is unique and
+  /// stable and is what the log calls the band anyway.
+  String _fallbackName(BluetoothDevice target) {
+    final p = Profile.instance;
+    final remembered = p.bandDisplayName ?? '';
+    if (remembered.isNotEmpty && p.bandId == target.remoteId.str) {
+      return remembered;
+    }
+    return target.remoteId.str;
+  }
+
   Future<bool> connect(BluetoothDevice target) async {
     if (state == LinkState.connecting) return false;
     state = LinkState.connecting;
@@ -402,7 +431,7 @@ class BandLink {
     // connecting straight from one band to another must not inherit the
     // first one's firmware, model or serial.
     _forgetIdentity();
-    _log('connecting to ${target.platformName}...');
+    _log('connecting to $_reconnectName...');
     _emit();
 
     try {
@@ -488,9 +517,24 @@ class BandLink {
       _notifySub = _notify!.lastValueStream.listen(_onNotify);
 
       device = target;
-      deviceName = target.platformName;
+      // ⚠ Every reading this link produces is filed under `deviceName`, on
+      // the phone and on the server, and the server refuses a blank one.
+      // `platformName` is Android's cached GATT name, and on a remembered
+      // reconnect it is '' more often than not — the scan a few lines up
+      // already knows this and falls back to the advertisement, but this
+      // line did not. Two participants' phones then stored every reading
+      // under device '' for five days; the server answered 400 to each batch
+      // and the outbox threw the batch away. Never blank, whatever the band
+      // says about itself.
+      final advertised = _advertisedName(target);
+      deviceName = advertised.isNotEmpty ? advertised : _fallbackName(target);
+      // Only a name the band actually advertised is worth remembering; the
+      // address fallback would overwrite a good display name with a MAC.
       await Profile.instance.rememberBand(target.remoteId.str, model,
-          displayName: target.platformName);
+          displayName: advertised);
+      if (advertised.isEmpty) {
+        _log('band gave no name; filing readings under $deviceName');
+      }
       state = LinkState.connected;
       _log('connected — write ${_write!.uuid.str}, notify ${_notify!.uuid.str}');
       // A successful connect is the first moment the app is certain to hold a

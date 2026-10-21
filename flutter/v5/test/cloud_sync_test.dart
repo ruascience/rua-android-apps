@@ -20,6 +20,8 @@ void main() {
     c.enabled = true;
     c.pending = 0;
     c.pushedThisSession = 0;
+    c.rejectedThisSession = 0;
+    c.rejected = 0;
     c.lastError = '';
     c.lastSuccess = null;
     c.state = CloudState.idle;
@@ -103,6 +105,36 @@ void main() {
           reason: 'retrying an unacceptable payload can never succeed');
       expect(CloudSync.instance.lastError, contains('400'),
           reason: 'dropping data silently would be worse than the bug');
+    });
+
+    test('a 400 sets the rows aside on the phone, it does not delete them',
+        () async {
+      // Two participants lost five days this way: the server refused every
+      // batch, and "settled" meant "marked synced", which meant gone.
+      await seed();
+      CloudSync.instance.clientForTest = MockClient(
+          (_) async => http.Response('{"error":"validation"}', 400));
+      await CloudSync.instance.flush();
+
+      expect(await Store.instance.pendingCount(), 0);
+      expect(await Store.instance.rejectedCount(), 3,
+          reason: 'refused rows are kept, out of the queue');
+      expect(CloudSync.instance.rejected, 3,
+          reason: 'and the Device tab is told how many');
+      expect(CloudSync.instance.rejectedThisSession, 3);
+
+      // Once whatever the server objected to is fixed they can go again.
+      expect(await Store.instance.requeueRejected(), 3);
+      expect(await Store.instance.pendingCount(), 3);
+      var sent = 0;
+      CloudSync.instance.clientForTest = MockClient((req) async {
+        sent += (jsonDecode(req.body) as List).length;
+        return http.Response('{}', 200);
+      });
+      await CloudSync.instance.flush();
+      expect(sent, 3);
+      expect(await Store.instance.rejectedCount(), 0);
+      expect(await Store.instance.pendingCount(), 0);
     });
 
     test('garbage in the response body does not throw', () async {

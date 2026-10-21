@@ -227,6 +227,59 @@ class Store {
   static Future<void> upgradeProfileIdentityForTest(Database d) =>
       _addProfileIdentityColumns(d);
 
+  /// A row with no band name is a row that can never leave the phone.
+  ///
+  /// `device` is part of the key here and of the natural key on the server,
+  /// where it is `@NotBlank`. Rows did get stored under '' once — a
+  /// reconnect handed BandLink an empty platformName — and every upload of
+  /// them was refused and then discarded. Loud, not silent: a caller with no
+  /// name must not be writing readings at all.
+  static void _requireDevice(String device) {
+    if (device.isEmpty) {
+      throw ArgumentError.value(device, 'device', 'a reading must name its band');
+    }
+  }
+
+  /// Re-file rows that were stored under no band name at all.
+  ///
+  /// The one-off repair for phones that ran a build before [_requireDevice]:
+  /// their readings from those days are still here, under device '' and
+  /// marked synced because the server's refusal was taken as final. Give
+  /// them the band's name and queue them again. The newer value wins where
+  /// a row under the real name already exists — a daily total re-read later
+  /// in the day is the better one. Idempotent and cheap once there is
+  /// nothing left to fix, so it can run on every launch.
+  Future<int> reassignBlankDevice(String name) async {
+    if (name.isEmpty) return 0;
+    final d = await db;
+    final n = await d.transaction<int>((t) async {
+      int count(List<Map<String, Object?>> rows) =>
+          rows.isEmpty ? 0 : (rows.first.values.first as int? ?? 0);
+      final a = count(await t
+          .rawQuery("SELECT COUNT(*) AS n FROM samples WHERE device = ''"));
+      final b = count(await t.rawQuery(
+          "SELECT COUNT(*) AS n FROM sleep_segments WHERE device = ''"));
+      if (a == 0 && b == 0) return 0;
+      if (a > 0) {
+        await t.rawInsert(
+            'INSERT OR REPLACE INTO samples(device, metric, at, value, owner, synced) '
+            "SELECT ?, metric, at, value, owner, 0 FROM samples WHERE device = ''",
+            [name]);
+        await t.rawDelete("DELETE FROM samples WHERE device = ''");
+      }
+      if (b > 0) {
+        await t.rawInsert(
+            'INSERT OR REPLACE INTO sleep_segments(device, start, minutes, stages, owner, synced) '
+            "SELECT ?, start, minutes, stages, owner, 0 FROM sleep_segments WHERE device = ''",
+            [name]);
+        await t.rawDelete("DELETE FROM sleep_segments WHERE device = ''");
+      }
+      return a + b;
+    });
+    if (n > 0) _bump();
+    return n;
+  }
+
   // ------------------------------------------------------- cloud sync
 
   /// Rows the server has not confirmed yet, oldest first.
@@ -267,6 +320,59 @@ class Store {
           whereArgs: [r['device'], r['start']]);
     }
     await batch.commit(noResult: true);
+  }
+
+  /// Rows the server refused with a 4xx: kept, set aside, not re-sent.
+  ///
+  /// `synced` = 2. Out of the queue, so a payload the server will never
+  /// accept cannot wedge every row behind it — but still on the phone, so
+  /// whatever was wrong with it can be fixed and the rows sent again. They
+  /// used to be marked 1, i.e. thrown away, which is how five days of two
+  /// participants' readings went missing with "Sync error" as the only trace.
+  Future<void> markSamplesRejected(Iterable<Map<String, Object?>> rows) async {
+    final d = await db;
+    final batch = d.batch();
+    for (final r in rows) {
+      batch.update('samples', {'synced': 2},
+          where: 'device = ? AND metric = ? AND at = ?',
+          whereArgs: [r['device'], r['metric'], r['at']]);
+    }
+    await batch.commit(noResult: true);
+  }
+
+  Future<void> markSleepRejected(Iterable<Map<String, Object?>> rows) async {
+    final d = await db;
+    final batch = d.batch();
+    for (final r in rows) {
+      batch.update('sleep_segments', {'synced': 2},
+          where: 'device = ? AND start = ?',
+          whereArgs: [r['device'], r['start']]);
+    }
+    await batch.commit(noResult: true);
+  }
+
+  /// How many rows the server has refused and the phone is holding on to.
+  Future<int> rejectedCount() async {
+    final d = await db;
+    int count(List<Map<String, Object?>> rows) =>
+        rows.isEmpty ? 0 : (rows.first.values.first as int? ?? 0);
+    final a = count(
+        await d.rawQuery('SELECT COUNT(*) AS n FROM samples WHERE synced = 2'));
+    final b = count(await d
+        .rawQuery('SELECT COUNT(*) AS n FROM sleep_segments WHERE synced = 2'));
+    return a + b;
+  }
+
+  /// Put refused rows back in the queue, e.g. after an app or server update
+  /// that fixed what the server objected to.
+  Future<int> requeueRejected() async {
+    final d = await db;
+    final a = await d.update('samples', {'synced': 0},
+        where: 'synced = 2');
+    final b = await d.update('sleep_segments', {'synced': 0},
+        where: 'synced = 2');
+    if (a + b > 0) _bump();
+    return a + b;
   }
 
   /// How much is still waiting to go up. Shown in the UI, so a stalled sync
@@ -407,6 +513,7 @@ class Store {
   /// Sleep, stamped the same way and for the same reason as [putSamples].
   Future<void> putSleepSegments(
       String device, Iterable<j.SleepSegment> segs, {String? owner}) async {
+    _requireDevice(device);
     final who = owner ?? Collecting.instance.profileId;
     final d = await db;
     final batch = d.batch();
@@ -475,6 +582,7 @@ class Store {
   /// forgotten beats six that can. [owner] overrides it, for tests.
   Future<void> putSamples(String device, String metric, Iterable<Sample> samples,
       {String? owner}) async {
+    _requireDevice(device);
     final who = owner ?? Collecting.instance.profileId;
     final d = await db;
     final batch = d.batch();

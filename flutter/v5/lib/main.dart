@@ -13,6 +13,7 @@ import 'data/cloud_sync.dart';
 import 'data/app_lock.dart';
 import 'data/collecting.dart';
 import 'data/session.dart';
+import 'data/store.dart';
 import 'data/sync_service.dart';
 import 'ui/kit.dart';
 import 'ui/login_page.dart';
@@ -62,6 +63,22 @@ Future<void> main() async {
   } catch (e, st) {
     storageFailed = true;
     debugPrint('[AuraV5] profile load failed, starting with defaults: $e\n$st');
+  }
+
+  // Readings stored under no band name — a reconnect once handed BandLink
+  // an empty platformName — can never be uploaded. Re-file them under the
+  // remembered band and queue them, before the cloud sync below starts
+  // draining. Nothing to do on a phone that never hit the bug.
+  try {
+    final name = Profile.instance.bandDisplayName ?? Profile.instance.bandId;
+    final fixed = await Store.instance.reassignBlankDevice(name ?? '');
+    if (fixed > 0) {
+      debugPrint('[AuraV5] re-filed $fixed readings under $name');
+      BandLink.instance.log
+          .add('re-filed $fixed readings stored without a band name');
+    }
+  } catch (e) {
+    debugPrint('[AuraV5] blank-device repair failed: $e');
   }
 
   // Pick up where the last session left off: if the band from last time is
